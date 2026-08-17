@@ -1,0 +1,17 @@
+# Local scratch / working files — never publish
+.scratch/
+*.env
+*.key
+*.pem
+*.p12
+*.pfx
+*credentials*.json
+*-key.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~

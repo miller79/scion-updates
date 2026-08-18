@@ -29,8 +29,8 @@ attribution needed, no need to ask.
 | [**FINDINGS.md**](FINDINGS.md) | The canonical numbered list. This is the one to act on — findings cross-reference each other, so they live in one place and get corrected in place. |
 | [**updates/**](updates/) | A dated entry per working day: what we did, what we found, what we got wrong. Append-only — nothing here is rewritten later. |
 
-Latest: [**2026-08-18**](updates/2026-08-18.md) — authorization findings, and a correction to
-finding 1.
+Latest: [**2026-08-18**](updates/2026-08-18.md) — authorization findings, a correction, and a
+fix that undid itself.
 
 ## What we found
 
@@ -41,7 +41,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 |---|---|---|---|
 | 13 | `--session-secret` in the systemd template leaks the cookie signing secret into `ps` | 🔴 **Security** | Trivial |
 | 11 | Local secrets backend stores plaintext, while a comment says writes are rejected | 🔴 **Security** | Low–Med |
-| 16 | Every authenticated user can read every project by default — `visibility: private` is inert *(includes a tested fix)* | 🔴 **Security** | Low |
+| 16 | Every authenticated user can read every project by default — `visibility: private` is inert *(includes a tested fix, and a trap: deleting the policy silently reverts on restart)* | 🔴 **Security** | Low |
 | 17 | The `viewer` role is selectable but never enforced — identical to `member` | 🔴 **Security** | Low |
 | 2 | `gce-start-hub.sh` does `git push origin main`, which nobody outside the repo can do | 🔴 Blocking | Low |
 | 4 | The OIDC guide gives a redirect URI route that doesn't exist | 🔴 Blocking | Trivial |

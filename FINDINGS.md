@@ -222,6 +222,60 @@ We offer this as a candidate default rather than a proven-complete one — but i
 concrete starting point that measurably restores isolation without breaking the read paths we
 could exercise.
 
+#### ⚠️ Deleting the policy is NOT a durable fix — it silently reverts
+
+This one caught us, and it is arguably worse than the original default.
+
+Our first attempt was simply to **delete** `hub-member-read-all`. Isolation worked, and a
+second non-admin user independently confirmed they could no longer see another user's
+project. We considered it done.
+
+It came back at the next hub restart.
+
+`seedPolicy` (`pkg/hub/seed.go`) matches **by name only**:
+
+```go
+existing, err := s.ListPolicies(ctx, store.PolicyFilter{Name: policy.Name}, store.ListOptions{Limit: 1})
+if existing.TotalCount > 0 {
+    return          // exists by name -> leave alone
+}
+// ... otherwise create it
+```
+
+So the seed runs on **every startup** and recreates any policy whose *name* is absent. Delete
+the wildcard and it is faithfully restored the next time the hub restarts — with no warning,
+and no signal to the operator that their isolation has just been undone.
+
+That is a nasty failure mode: an admin removes the policy, verifies isolation, ships it, and
+loses it at the next deploy or reboot while still believing it is closed.
+
+**The durable approach is to keep the name and neuter the contents**, so the seeder finds it
+and leaves it alone:
+
+```
+PATCH /api/v1/policies/{id}
+{
+  "name": "hub-member-read-all",          // name retained so seed.go does not recreate it
+  "resourceType": "_disabled",            // matches nothing: matchesResource is exact string equality
+  "actions": ["read"],
+  "effect": "allow",
+  "scopeType": "hub"
+}
+```
+
+**Verified across a restart this time:** after `systemctl restart scion-hub`, the policy list
+showed no wildcard, no duplicate `hub-member-read-all`, and no `seeded policy` log lines. A
+member still saw only their own project and agent, with templates, brokers, and harness
+configs all still readable.
+
+**Suggested fix regardless of which route upstream takes:** whatever the default becomes,
+make it *changeable*. Right now a seeded policy can be deleted through the API and silently
+restored by the next boot, which means the API and the seeder disagree about who owns that
+row. Either skip re-seeding when an operator has explicitly removed a seeded policy (a
+tombstone, or an `origin`/`managed` marker like `syncHubSettings` already uses for hub
+settings), or document clearly that seeded policies are not deletable and must be edited in
+place.
+
 ### 17. The `viewer` role implies a restriction it does not provide 🟠
 
 `viewer` is a first-class user role: it is in the ent enum

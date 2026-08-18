@@ -3,18 +3,26 @@
 *Anthony Lofton — August 2026*
 
 We stood up a Scion Hub on an internal-only GCE VM (Ubuntu 24.04) with Keycloak SSO and TLS
-handled by an F5 BIG-IP. Running `main` @ `1b3c9418`.
+handled by an F5 BIG-IP. Running `main` @ `1933d359`.
 
 **It works.** But we hit enough snags getting there that it seemed worth writing down —
 partly so the next person in a similar environment has an easier time, and partly because a
 few of these look like real bugs rather than just "our setup is unusual".
 
-> **A note on freshness:** we first deployed at `90bf246e`, then pulled 24 commits (through
-> PR #1201) and rebuilt before finalising this. **Everything below is still present in that
-> build** — we re-checked each item rather than assuming. `scripts/starter-hub/` and
-> `pkg/secret/` were both untouched by those 24 commits, so issue 11 in particular is
-> unchanged. The three secrets-related commits in the range (#1181, #1183, #1184) are about
-> plugin-config secret migration, not the local backend's at-rest storage.
+> **A note on freshness:** we deployed at `90bf246e`, then pulled 24 commits (through PR
+> #1201), then a further 16 (through PR #1217) — rebuilding and re-checking every item each
+> time. **All 17 issues below are still present in `1933d359`.**
+>
+> One thing worth flagging from the latest round: **PR #1205 ("add shellcheck gate and fix
+> existing findings") edited eight files under `scripts/starter-hub/`**, including the two
+> scripts most of this report concerns. Those edits were pure lint hygiene — `# shellcheck`
+> directives, `read -r`, quoting `--labels` and `--create-disk`. The `git push origin main`,
+> the stale Go pin, and the `--session-secret` on the systemd `ExecStart` line all came
+> through untouched, which is entirely expected since shellcheck has no opinion on any of
+> them. Noted just to make clear these aren't things a linter will surface.
+>
+> `pkg/secret/` has been untouched across all 40 commits, so issue 11 is exactly as
+> described.
 
 ---
 
@@ -30,12 +38,11 @@ steps didn't apply**. We ended up doing the relevant parts by hand, which is how
 this came to light.
 
 Issues are numbered in the order we found them — the table at the end is sorted by priority
-instead. Numbers 11–15 came later, while we were hardening things for a wider test group and
+instead. Numbers 11–17 came later, while we were hardening things for a wider test group and
 trying to get telemetry working.
 
 **If you only look at three:** **13** and **11** are the security ones, and **13 is a
-one-line fix**. **14 + 15** together mean the Metrics dashboard can't work on a stock
-install.
+one-line fix**. **2** is the one that stops a stock deployment dead at step 1.
 
 ---
 
@@ -123,18 +130,150 @@ the exposure. We verified this in place: no `--session-secret` in `ps`, and no
 
 The same argument applies to `--storage-bucket`, though a bucket name is not sensitive.
 
+### 16. Every authenticated user can read every project by default 🔴
+
+On first startup `pkg/hub/seed.go` creates this policy:
+
+```go
+Name:         "hub-member-read-all",
+Description:  "Allow hub members to read all resources",
+ScopeType:    "hub",
+ResourceType: "*",                          // every resource type
+Actions:      []string{"read", "list"},
+Effect:       "allow",
+```
+
+It is bound to the `hub-members` group, and **every user is auto-joined to that group on
+login** (`pkg/hub/handlers_auth.go`). The net effect is that any authenticated user can read
+every project, agent, and resource on the hub.
+
+We hit this during a security test: two users each created a project, and each could
+immediately see the other's.
+
+What makes it worth flagging is that the rest of the design clearly anticipates isolation:
+
+- The policy engine is **default-deny** — `Decision{Allowed: false, Reason: "default deny"}`
+  (`pkg/hub/authz.go`)
+- Projects carry a `visibility` field with `private` / `team` / `public`
+  (`pkg/api/types.go`)
+
+Both are overridden by the one seeded wildcard. A project created with
+`visibility: "private"` displays as private and is readable by everyone — the field is
+currently inert.
+
+**To be precise about severity:** the grant is `read` + `list` only. Writes still fall
+through to default deny, and we verified a non-owner could not modify another user's
+project. This is visibility exposure, not a write hole.
+
+**Suggested fix — any of these:**
+1. Narrow the seed to the shared building blocks it is presumably meant to cover —
+   `template`, `skill`, `harness_config`, `broker` — and exclude `project` and `agent`
+2. Or make the policy honour `visibility`, so `private` means something
+3. Or, if collaborative-by-default is the intended product stance, **document it
+   prominently**. "Scion hubs are collaborative by default: every member can see every
+   project" is a perfectly reasonable design choice — it just needs stating up front rather
+   than being discovered during a security review.
+
+We would suggest 1 or 3. Silently defaulting open is the part worth changing.
+
+#### We tested option 1 — here is a working seed
+
+Rather than leave this as "narrow it somehow", we ran the change on our hub and measured it.
+
+Replaced the single wildcard with four type-specific policies, all `ScopeType: "hub"`,
+`Actions: ["read","list"]`, `Effect: "allow"`, bound to the same `hub-members` group:
+
+```
+hub-member-read-template          resourceType: template
+hub-member-read-harness_config    resourceType: harness_config
+hub-member-read-skill             resourceType: skill
+hub-member-read-broker            resourceType: broker
+```
+
+then deleted `hub-member-read-all`.
+
+Note these must be **four separate policies** — `matchesResource` (`pkg/hub/authz.go`) does a
+plain string comparison on `ResourceType`, so `"*"` is the only special value and a
+comma-separated list would match nothing.
+
+**Measured A/B**, same user, same token, only the policy set changed. The user was demoted
+from `admin` to `member` for the test, since the admin bypass would otherwise mask the result:
+
+| | wildcard present | wildcard removed |
+|---|---|---|
+| Projects visible | 3 (including one owned by another user) | **1 — own only** |
+| Agents visible | 2 | **1 — own only** |
+| Templates | 1 | 1 (preserved) |
+| Skills | 0 | 0 (preserved) |
+| Brokers | 1 | 1 (preserved) |
+| Harness configs | 7 | 7 (preserved) |
+
+Every endpoint still returned HTTP 200 — no 403s, nothing degraded. Cross-project visibility
+closed; the shared building blocks a member needs in order to build anything stayed readable.
+
+**What we verified:** all read paths above, and that project isolation is genuinely restored
+(a member no longer sees another user's project or its agents).
+
+**What we did not verify:** a member creating an agent end to end. Templates and brokers being
+*readable* is necessary but may not be sufficient — the create path may consult resource types
+we did not enumerate. If it does, the fix is presumably one more policy of the same shape.
+
+We offer this as a candidate default rather than a proven-complete one — but it is at least a
+concrete starting point that measurably restores isolation without breaking the read paths we
+could exercise.
+
+### 17. The `viewer` role implies a restriction it does not provide 🟠
+
+`viewer` is a first-class user role: it is in the ent enum
+(`admin` / `member` / `viewer`), it is selectable from the admin UI
+(`web/src/components/pages/admin-users.ts`), and it is the default role assigned to
+federated identities (`pkg/hub/federation_auth.go`).
+
+**It is never consulted in any authorization decision.** We grepped the tree: the only role
+check in the authz path is `user.Role() == "admin"` (`pkg/hub/authz.go`). `member` and
+`viewer` are functionally identical — both fall through to policy evaluation and receive
+exactly the same answer.
+
+So an operator who demotes a user to `viewer` expecting read-only access reasonably believes
+they have restricted that user. They have not. Combined with issue 16, a "viewer" can read
+every project on the hub, which is the same as everyone else.
+
+**Suggested fix:** either implement it (a `viewer` deny baseline for mutating actions, sitting
+alongside the existing admin bypass), or remove it from the enum and the admin UI so it
+cannot imply a guarantee it does not make.
+
+
 ---
 
 ## Things that block a deployment
 
-### 1. Hardcoded Go version no longer satisfies `go.mod` 🔴
+### 1. Hardcoded Go version no longer satisfies `go.mod` 🟠
 
 `go.mod` requires `go 1.26.1`, but the install scripts pin **Go 1.23.0** in two places:
 
 - `scripts/starter-hub/gce-demo-cloud-init.yaml`
 - `scripts/starter-hub/gce-start-hub.sh` (the "install missing dependencies" block)
 
-Following the documented path produces a hard build failure. We installed Go 1.26.6.
+**Correction to an earlier draft of this report:** we initially described this as a hard
+build failure. It usually is not. With the default `GOTOOLCHAIN=auto` and network access,
+Go quietly downloads the required toolchain and the build succeeds. We verified this:
+
+```
+$ go version                       # with 1.23.0 installed, in a go1.26.1 module
+go: downloading go1.26.1 (linux/amd64)
+go version go1.26.1 linux/amd64    # ← silently substituted
+```
+
+It *does* fail hard where toolchain download is unavailable — `GOTOOLCHAIN=local`,
+air-gapped hosts, or a restricted module proxy:
+
+```
+go: go.mod requires go >= 1.26.1 (running go 1.23.0; GOTOOLCHAIN=local)
+```
+
+So this is less severe than first stated, but still worth fixing: the provisioned toolchain
+is not the one that builds the binary, the pin is silently stale, and it breaks exactly the
+locked-down environments where the starter-hub is most awkward to debug.
 
 **Suggested fix:** derive the version from `go.mod` rather than hardcoding, e.g.
 
@@ -443,7 +582,9 @@ Ordered by priority, not by issue number.
 |---|---|---|---|
 | **13** | **Drop `--session-secret` from the systemd template — it exposes the cookie signing secret via `ps`** | **Security** | **Trivial** |
 | **11** | **Local backend stores plaintext while its comment claims writes are rejected** | **Security** | Low–Med |
-| 1 | Derive Go version from `go.mod`; add CI drift check | Blocking | Low |
+| **16** | **All authenticated users can read all projects by default; `visibility` is inert** | **Security** | Low |
+| **17** | **`viewer` role implies a restriction it does not enforce** | **Security** | Low |
+| 1 | Derive Go version from `go.mod`; add CI drift check | High | Low |
 | 2 | Remove/gate `git push origin main` | Blocking | Low |
 | 4 | Fix OIDC redirect URI in docs → `/auth/callback/oidc` | Blocking | Trivial |
 | 14 | Add `telemetry.cloud.gcp_project_id` to the settings template | High | Trivial |

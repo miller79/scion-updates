@@ -11,7 +11,7 @@ few of these look like real bugs rather than just "our setup is unusual".
 
 > **A note on freshness:** we deployed at `90bf246e`, then pulled 24 commits (through PR
 > #1201), then a further 16 (through PR #1217) — rebuilding and re-checking every item each
-> time. **All 17 issues below are still present in `1933d359`.**
+> time. **All 19 issues below are still present in `1933d359`.**
 >
 > One thing worth flagging from the latest round: **PR #1205 ("add shellcheck gate and fix
 > existing findings") edited eight files under `scripts/starter-hub/`**, including the two
@@ -38,7 +38,7 @@ steps didn't apply**. We ended up doing the relevant parts by hand, which is how
 this came to light.
 
 Issues are numbered in the order we found them — the table at the end is sorted by priority
-instead. Numbers 11–17 came later, while we were hardening things for a wider test group and
+instead. Numbers 11–19 came later, while we were hardening things for a wider test group and
 trying to get telemetry working.
 
 **If you only look at three:** **13** and **11** are the security ones, and **13 is a
@@ -176,6 +176,31 @@ project. This is visibility exposure, not a write hole.
 
 We would suggest 1 or 3. Silently defaulting open is the part worth changing.
 
+#### Why we would call this a gap rather than a design stance
+
+"Scion hubs are collaborative; everyone sees everything" would be a perfectly defensible
+product decision. But the codebase argues against that reading:
+
+- the policy engine is **default-deny** (`pkg/hub/authz.go`)
+- projects carry a `visibility` field supporting `private` / `team` / `public`
+- there is a per-project members group with `owner` / `admin` / `member` roles
+- there is an `isProjectOwnerOrAdmin` baseline specifically for project-level access
+
+Someone clearly designed for isolation. A single seeded wildcard overrides all of it, and the
+per-project seed is missing the one policy that would make membership meaningful (finding 18).
+Taken together that reads like unfinished wiring rather than an intentional stance.
+
+The practical consequence for an operator: there is **no supported way to turn isolation on**.
+No configuration flag, no admin UI, no documented pattern. Achieving it requires knowing that
+`hub-member-read-all` exists, that deleting it silently re-seeds, that `matchesResource` is
+exact-string so one policy per type is needed, and that per-project read is not auto-created.
+We only assembled that from reading the source.
+
+To be fair about severity: this is **read visibility**, not a write hole. Non-owners cannot
+modify or delete another user's project, agent creation is already restricted to project
+members, and secret scoping is genuinely enforced. The confidentiality boundary is missing;
+the integrity boundary is not.
+
 #### We tested option 1 — here is a working seed
 
 Rather than leave this as "narrow it somehow", we ran the change on our hub and measured it.
@@ -295,6 +320,54 @@ every project on the hub, which is the same as everyone else.
 **Suggested fix:** either implement it (a `viewer` deny baseline for mutating actions, sitting
 alongside the existing admin bypass), or remove it from the enum and the admin UI so it
 cannot imply a guarantee it does not make.
+
+### 18. The per-project member seed is incomplete — membership does not confer visibility 🟠
+
+When a project is created, Scion auto-creates a members group and two policies
+(`createProjectMembersGroupAndPolicy`):
+
+```
+project:<slug>:member-create-agents           agent                 ["create","stop_all"]
+project:<slug>:member-assign-service-accounts gcp_service_account   ["assign"]
+```
+
+**Neither grants `read` or `list` on the project itself**, and the
+`isProjectOwnerOrAdmin` baseline (`pkg/hub/authz.go`) only fires for group role `owner` or
+`admin` — not `member`.
+
+So a user added to a project as a `member` can create and stop agents in a project **they
+cannot see**. We hit this directly: added a member to a project, and the project stayed
+invisible to them.
+
+This never surfaces on a default install, because `hub-member-read-all` (finding 16) grants
+read on everything and quietly covers it. The moment an operator narrows that wildcard for
+isolation — the very thing finding 16 recommends — project membership stops meaning anything.
+The two findings are coupled: **fixing 16 without fixing 18 leaves members unable to see the
+projects they belong to.**
+
+**Verified fix.** Adding one project-scoped policy per project, bound to that project's
+members group, restores it:
+
+```
+scopeType:    project
+scopeId:      <project-id>
+resourceType: project
+actions:      ["read","list"]
+effect:       allow
+```
+
+After adding it, the member saw the project they belong to (2 projects: one owned, one joined)
+while still not seeing unrelated projects. Confirmed to survive a hub restart.
+
+Note this covers the project, not its contents — `agent: read/list` is a separate gap with the
+same shape, so a member can see the project but not the agents running in it. Whether that is
+desirable is a product decision, but it should be a decision rather than an accident.
+
+**Suggested fix:** add `project: ["read","list"]` (and probably `agent: ["read","list"]`) to
+the per-project policy set created by `createProjectMembersGroupAndPolicy`. Without it, the
+per-project seed depends on a hub-wide wildcard that any security-conscious operator will
+want to remove.
+
 
 
 ---
@@ -513,6 +586,47 @@ appears to have been overlooked.
 > `--scopes=cloud-platform`, so the access-scope layer is fine on a stock deploy — it only
 > bit us because our pre-existing VM had narrower scopes.
 
+
+### 19. No way to import a template without a remote URL or server-side files 🟡
+
+*(Feature request rather than a defect.)*
+
+Template import accepts exactly one source — a URL:
+
+```go
+// pkg/hub/handlers_resource_import.go
+if req.SourceURL == "" {
+    writeError(w, http.StatusBadRequest, "invalid_request", "sourceUrl is required", nil)
+}
+```
+
+`NormalizeTemplateSourceURL` resolves that into `http(s)://`, `git+https://`, a GitHub
+`owner/repo` shorthand, or an rclone remote. The per-project endpoint additionally accepts a
+**workspace path** — files already sitting on the server.
+
+So in practice a template must either live in a git repo / reachable URL, or already be on the
+hub host. There is **no upload path**: nothing in the template import flow parses
+`multipart/form-data`.
+
+This is awkward in an enterprise setting. Getting a template in means either pushing it to a
+git remote the hub can reach (which may cross a network or approval boundary) or having shell
+access to the host (which most users deliberately do not have). "Here is a zip of a template,
+please add it" has no answer.
+
+**Two things make this a smaller ask than it first appears:**
+
+1. **The extraction code already exists.** `extractZip(zipPath, destPath)` in
+   `pkg/config/remote_templates.go` already unpacks zips (and gzip/tar) for archives fetched
+   from remote URLs. An upload endpoint would reuse it rather than add anything new.
+2. **The upload pattern already exists elsewhere in the hub.** `admin_allow_list.go` and
+   `admin_user_invite.go` both accept `multipart/form-data` via `r.FormFile("file")`. So this
+   would follow an established convention in the same codebase, not introduce one.
+
+**Suggested fix:** accept `multipart/form-data` on the existing import endpoints alongside
+`sourceUrl` — upload a zip, run it through `extractZip`, then feed the result into the same
+discovery path the URL flow already uses.
+
+
 ---
 
 ## Enterprise friction
@@ -638,6 +752,7 @@ Ordered by priority, not by issue number.
 | **11** | **Local backend stores plaintext while its comment claims writes are rejected** | **Security** | Low–Med |
 | **16** | **All authenticated users can read all projects by default; `visibility` is inert** | **Security** | Low |
 | **17** | **`viewer` role implies a restriction it does not enforce** | **Security** | Low |
+| **18** | **Per-project member seed omits `project: read` — membership confers no visibility** | **Security** | Low |
 | 1 | Derive Go version from `go.mod`; add CI drift check | High | Low |
 | 2 | Remove/gate `git push origin main` | Blocking | Low |
 | 4 | Fix OIDC redirect URI in docs → `/auth/callback/oidc` | Blocking | Trivial |
@@ -650,6 +765,7 @@ Ordered by priority, not by issue number.
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
 | 6 | Fix dev-auth cleanup user (`scion@localhost`) | Medium | Trivial |
 | 9 | Document corporate npm registry setup | Medium | Low |
+| 19 | Accept a zip upload for template import (extractor already exists) | Low (feature) | Low |
 | 10 | `--version` alias; drop NATS; placeholder registry | Low | Low |
 
 Happy to supply logs, configs, or test any of these against our environment — we have

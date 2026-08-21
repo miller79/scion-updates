@@ -7,7 +7,7 @@ We got it working — but hit a fair number of snags along the way, mostly in pl
 show up when you're not deploying to a fresh public-internet VM. Rather than let that
 knowledge evaporate, it's all here with file references so it's easy to act on.
 
-Everything was **re-verified against current `main` twice**, not written from memory — most recently across 40 commits, with all 17 issues still present.
+Everything was **re-verified against current `main` twice**, not written from memory — most recently across 40 commits, with all 19 issues still present.
 
 ## The short version
 
@@ -29,8 +29,8 @@ attribution needed, no need to ask.
 | [**FINDINGS.md**](FINDINGS.md) | The canonical numbered list. This is the one to act on — findings cross-reference each other, so they live in one place and get corrected in place. |
 | [**updates/**](updates/) | A dated entry per working day: what we did, what we found, what we got wrong. Append-only — nothing here is rewritten later. |
 
-Latest: [**2026-08-18**](updates/2026-08-18.md) — authorization findings, a correction, and a
-fix that undid itself.
+Latest: [**2026-08-21**](updates/2026-08-21.md) — real users, real projects, and isolation
+made to work.
 
 ## What we found
 
@@ -43,6 +43,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 11 | Local secrets backend stores plaintext, while a comment says writes are rejected | 🔴 **Security** | Low–Med |
 | 16 | Every authenticated user can read every project by default — `visibility: private` is inert *(includes a tested fix, and a trap: deleting the policy silently reverts on restart)* | 🔴 **Security** | Low |
 | 17 | The `viewer` role is selectable but never enforced — identical to `member` | 🔴 **Security** | Low |
+| 18 | Project membership grants agent create/stop but **not** read — so fixing 16 hides projects from their own members | 🔴 **Security** | Low |
 | 2 | `gce-start-hub.sh` does `git push origin main`, which nobody outside the repo can do | 🔴 Blocking | Low |
 | 4 | The OIDC guide gives a redirect URI route that doesn't exist | 🔴 Blocking | Trivial |
 | 14 | Settings template misses `telemetry.cloud.gcp_project_id`, so the metrics dashboard is dead | 🟠 High | Trivial |
@@ -55,10 +56,12 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 7 | No real path for internal-only / bring-your-own-cert / IAP setups | 🟠 High | Medium |
 | 6 | Dev-auth cleanup command deletes the wrong username (so, nothing) | 🟡 Medium | Trivial |
 | 9 | Nothing documented for pointing the build at a corporate package registry | 🟡 Medium | Low |
+| 19 | No way to import a template except from a URL or server-side files — no zip upload *(feature request)* | 🟡 Low | Low |
 | 10 | Small stuff: no `--version` alias, NATS still installed, a placeholder registry that looks real | 🟡 Low | Low |
 
-**If you only look at three:** 16 is the one most enterprises will care about — all users
-can read all projects out of the box. 13 is a one-line security fix. 2 stops a stock
+**If you only look at three:** 16 and 18 together are the one most enterprises will care
+about — all users can read all projects out of the box, and the obvious fix hides projects
+from their own members. 13 is a one-line security fix. 2 stops a stock
 deployment dead at step 1.
 
 There's a **"What worked well"** section in there too — the list above is all complaints,
@@ -67,7 +70,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 17 bugs" is easy to write and harder to trust:
+Worth saying, since "we found 19 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms

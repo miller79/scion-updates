@@ -879,7 +879,64 @@ When the progeny lookup finds nothing, resolution falls back to `default_type`, 
 told a token is missing for an auth type they never chose. Anyone hitting this will search for
 the wrong thing.
 
-**Workaround, now exercised end-to-end:** create the user-scoped
+### Blocker 3 — `resolveSecrets` still returns nothing, even with 1 and 2 fixed
+
+With `allow_progeny = 1` and `created_by` set to the bare user UUID, `hasAnyKey` now succeeds
+and auth resolves to the right type:
+
+```
+auth: after overlay — selectedType="auth-file"
+```
+
+But the credential is still never delivered:
+
+```
+resolveSecrets: querying secret backend  ownerID=3f1926b8-…  project_id=1afd7fe5-…
+resolveSecrets: resolved secrets  count=0  names=[]
+auth: resolved — method="container-script", envVars=map[SCION_HARNESS_SELECTED_AUTH:auth-file], files=0
+```
+
+`count=0`, `files=0`. The agent starts, Copilot finds no credentials and writes its own default
+`config.json` (175 bytes, keys `firstLaunchAt` and `trustedFolders` only), and the session
+reports **"Please use /login to sign in to use Copilot"**. Note the failure is silent from the
+hub's side — nothing is logged as an error, and the agent is healthy.
+
+The progeny branch in `resolveSecrets` (`pkg/hub/httpdispatcher.go:2623`) is gated on two
+conditions and then filters through an authorization callback:
+
+```go
+if len(agent.Ancestry) > 1 && d.authzService != nil {
+    resolveOpts = &secret.ResolveOpts{
+        AgentAncestry: ancestry,
+        AuthzCheck: func(s secret.SecretMeta) bool {
+            decision := d.authzService.CheckAccess(ctx, …, Resource{Type: "secret", ID: s.ID}, ActionRead)
+            return decision.Allowed
+        },
+    }
+}
+```
+
+`len(agent.Ancestry) > 1` holds for these agents (ancestry is 2). We could not determine from
+outside which of the remaining conditions fails: **no secret authorization denial appears in
+the log at all**, while unrelated denials (e.g. `/api/v1/metrics/`) are logged at WARN. That
+asymmetry suggests the branch is not running rather than the secret being rejected — but we are
+stating that as an inference, not a conclusion. Either way the observable result is that
+progeny secret resolution does not work on this build with the **gcpsm** backend.
+
+Both `localbackend.go:209` and `gcpbackend.go:368` implement the progeny query identically and
+gate it on `opts.AgentAncestry`, so the backend choice is not the differentiator; the options
+struct simply arrives empty or its `AuthzCheck` rejects everything.
+
+**Net effect:** #1292 fixed the first gate. Two more sit behind it, and a credential captured
+by an agent through the documented flow still cannot reach that agent's progeny.
+
+**Practical workaround for operators today:** capture at **project** scope
+(`capture_auth.py --scope project --force`). Project-scoped secrets resolve through the ordinary
+path with no progeny logic and no authz callback, so every agent in the project — progeny
+included — receives them. The cost is that the credential is shared with everyone who can run
+agents in that project, which is exactly what user scope exists to avoid.
+
+**Workaround for the earlier blockers, exercised end-to-end:** create the user-scoped
 secret from the **web UI** with "allow progeny" enabled rather than via Capture Auth. That
 yields `created_by = <bare user UUID>` (in the ancestry) and `allow_progeny = 1`, satisfying
 both conditions. Project-scoping the credential also works and sidesteps progeny entirely,

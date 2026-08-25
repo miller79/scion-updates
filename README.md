@@ -55,7 +55,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 
 | # | Issue | Severity | Effort |
 |---|---|---|---|
-| 31 | Progeny agents still get no credentials after the #1292 fix — `created_by` is `agent:<uuid>` but ancestry holds bare UUIDs, so the match never fires | 🔴 **Security** | Low |
+| 31 | Progeny agents still get no credentials after the #1292 fix — **three** further blockers, incl. `resolveSecrets` returning `count=0` with ancestry present | 🔴 **Security** | Low |
 | 13 | `--session-secret` in the systemd template leaks the signing secret into `ps` — and now also undermines 11's encryption-at-rest fix, which derives its key from it | 🔴 **Security** | Trivial |
 | 21 | Secret Manager values are rewritten to SQLite in cleartext on every boot; the signing keys bypass 11's encryption entirely | 🔴 **Security** | Low |
 | 20 | `hub_id` derives from the hostname; a hostname change silently re-namespaces every secret | 🔴 **Security** | Low |

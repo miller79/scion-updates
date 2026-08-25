@@ -640,6 +640,51 @@ it only gates an optional workspace type. More generally, a 403 from a backgroun
 probe should not surface as a modal-level error; scoping error toasts to user-initiated
 requests would prevent this class of false alarm.
 
+### 28. The Metrics dashboard is offered to non-admins but its endpoint is admin-only 🟠
+
+Same family as issue 25, found the same way — by reading the hub log while a **member** had
+the UI open:
+
+```
+WARN  authorization denied  principal_type=user  resource_id="/api/v1/metrics/"
+      action=manage  reason="not an admin"  path="/api/v1/metrics/"
+DEBUG API client error  status=403  code=forbidden  message="Insufficient permissions"
+```
+
+Repeating every second or so, in pairs, for as long as the page was open.
+
+`/api/v1/metrics/` is registered admin-only:
+
+```go
+s.mux.HandleFunc("/api/v1/metrics/", s.requireAdminHandler(s.handleMetricsDashboard))
+```
+`pkg/hub/server.go:3628`
+
+`metrics-dashboard.ts` contains **no admin check of any kind** — we grepped it for
+`isAdmin`, `role` and `admin` and got nothing. `loadView()` fetches the endpoint and, on
+failure, throws into the page's `error` state:
+
+```ts
+const response = await apiFetch(`${basePath}?view=${view}&period=${this.periodDays}`);
+if (!response.ok) {
+  throw new Error(await extractApiError(response, `HTTP ${response.status}`));
+}
+```
+
+Two things compound it. Each view (`summary`, `sessions`, `model-calls`, …) is a separate
+request, so one page visit produces several 403s rather than one. And because `apiFetch`
+dispatches `scion:access-denied` on every 403 (see issue 25), a non-admin sitting on this page
+gets a stream of permission toasts on a timer, not just a broken chart.
+
+Note this is the **hub-level** dashboard. The project-scoped variant
+(`/api/v1/projects/{id}/metrics`) is a different path and is not admin-gated in the same way,
+so the page is partly usable — which is likely why the gap was not obvious.
+
+**Suggested fix:** hide the hub-level Metrics view from non-admins, or have the page probe
+capability once and render an explicit "admin only" state instead of failing per-view. The
+general fix in issue 25 — not letting background probes raise global error toasts — covers the
+toast half of this too.
+
 ## Things that block a deployment
 
 ### 1. Hardcoded Go version no longer satisfies `go.mod` 🟠
@@ -920,6 +965,65 @@ appears to have been overlooked.
 > `--scopes=cloud-platform`, so the access-scope layer is fine on a stock deploy — it only
 > bit us because our pre-existing VM had narrower scopes.
 
+
+### 29. Agent telemetry is enabled by default but cannot work until a GCP service account is assigned, and it fails silently forever 🟠
+
+Every agent container we start is given:
+
+```
+SCION_TELEMETRY_ENABLED=true
+SCION_TELEMETRY_DEBUG=true
+GCE_METADATA_HOST=localhost:18380
+GCE_METADATA_ROOT=localhost:18380
+```
+
+so the telemetry client authenticates through Scion's in-container metadata proxy. That proxy
+returns **403 for the token endpoint**:
+
+```
+$ curl -H "Metadata-Flavor: Google"     http://localhost:18380/computeMetadata/v1/instance/service-accounts/default/token
+Forbidden
+```
+
+**This is not a GCP IAM problem, and that is worth stating clearly** — we assumed it was at
+first. The host's own service account works fine (`http=200` from the VM, `cloud-platform`
+scope). The proxy is refusing because there is nothing to mint a token *from*:
+
+```
+gcp_service_accounts: 0 rows
+```
+
+No service account has been registered with the hub, so the proxy correctly declines. The
+telemetry exporter, however, does not treat that as terminal — it retries indefinitely:
+
+```
+[sciontool] INFO: [slog] failed to export to Google Cloud Trace: rpc error:
+  code = Unauthenticated ... cannot fetch token: compute: Received 403 `Forbidden`
+```
+
+| Agent | occurrences of that line |
+|---|---|
+| `agent-A` (up ~25h) | 3,015 |
+| `agent-B` (up ~19h) | 2,337 |
+
+Three things make this worse than a missing feature flag:
+
+1. **It is on by default.** An operator who never opts into GCP telemetry still gets an agent
+   that tries, and fails, thousands of times per day.
+2. **It is logged at `INFO`.** A continuously failing authenticated export is not an
+   informational event. At INFO it is invisible in normal operation and pure noise in debug.
+3. **Nothing surfaces it.** The hub reports healthy, the agent works normally, and the metrics
+   dashboard is simply empty — which reads as "no activity yet" rather than "telemetry has
+   never once succeeded".
+
+This is the same root cause as issues 14 and 15 seen from the agent side: the telemetry path
+has several independent prerequisites and no single place tells you which one is missing.
+
+**Suggested fix:** do not enable the cloud exporter unless a service account is actually
+resolvable; log the first failure at WARN with the reason ("no GCP service account assigned to
+this agent") and then stop or back off hard rather than retrying every few seconds forever. A
+one-line hub-side preflight — "telemetry enabled but 0 service accounts registered" — would
+have saved the whole investigation.
 
 ### 19. No way to import a template without a remote URL or server-side files 🟡
 
@@ -1226,6 +1330,8 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 28 | Hide the hub-level Metrics view from non-admins, or render an explicit admin-only state | High | Trivial |
+| 29 | Do not enable the cloud telemetry exporter without a resolvable service account; WARN once and back off | High | Low |
 | 26 | Expose the existing `archived` status so harnesses can be hidden; tombstone bundled configs so delete sticks | High | Low |
 | 6 | Fix dev-auth cleanup user (`scion@localhost`) | Medium | Trivial |
 | 9 | Accept an internal package registry in the image build; without it no image builds at all (patch available) | High | Low |

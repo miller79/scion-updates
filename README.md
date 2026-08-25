@@ -66,6 +66,8 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 2 | `gce-start-hub.sh` does `git push origin main`, which nobody outside the repo can do | 🔴 Blocking | Low |
 | 4 | The OIDC guide gives a redirect URI route that doesn't exist | 🔴 Blocking | Trivial |
 | 25 | Create Project shows a permission error to every non-admin on page load, before they touch anything | 🟠 High | Trivial |
+| 28 | Metrics dashboard is reachable by non-admins but its endpoint is admin-only — repeating 403s and permission toasts on a timer | 🟠 High | Trivial |
+| 29 | Agent telemetry is on by default, can never authenticate without a registered service account, and retries forever at `INFO` | 🟠 High | Low |
 | 26 | No way to hide an unused harness, and `harness-config delete` silently reverts on restart | 🟠 High | Low |
 | 14 | Settings template misses `telemetry.cloud.gcp_project_id`, so the metrics dashboard is dead | 🟠 High | Trivial |
 | 15 | Provision script grants `logging.viewer` but not `monitoring.viewer` | 🟠 High | Trivial |
@@ -94,7 +96,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 27 items" is easy to write and harder to trust:
+Worth saying, since "we found 29 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms

@@ -8,7 +8,7 @@ show up when you're not deploying to a fresh public-internet VM. Rather than let
 knowledge evaporate, it's all here with file references so it's easy to act on.
 
 Everything is **re-verified against current `main` after every upgrade**, not written from
-memory. Most recently at `2b8be982`, across five rounds of pulls.
+memory. Most recently at `aedf89ed`, across six rounds of pulls.
 
 ## The short version
 
@@ -51,7 +51,7 @@ project-owner rights.
 ## What's still open
 
 Full write-up: [**FINDINGS.md**](FINDINGS.md)
-(deployed `main` @ `2b8be982`, Ubuntu 24.04, Keycloak SSO, TLS via BIG-IP)
+(deployed `main` @ `aedf89ed`, Ubuntu 24.04, Keycloak SSO, TLS via BIG-IP)
 
 | # | Issue | Severity | Effort |
 |---|---|---|---|
@@ -125,7 +125,7 @@ Generalised — no internal hostnames or addresses in here.
 | Secrets | GCP Secret Manager backend, dedicated least-privilege service account |
 | Storage | GCS bucket, hub-namespaced |
 | Packages | Corporate Artifactory mirrors, public registries blocked |
-| Scion | `main` @ `90bf246e`, re-verified at `1b3c9418`, `1933d359`, `89ed0fe8`, and `2b8be982` |
+| Scion | `main` @ `90bf246e`, re-verified at `1b3c9418`, `1933d359`, `89ed0fe8`, `2b8be982`, and `aedf89ed` |
 
 ## Questions
 

@@ -18,6 +18,13 @@ few of these look like real bugs rather than just "our setup is unusual".
 > wrong throughout; 9 was substantially rewritten and 26-27 added while rebuilding all
 > container images from source behind a corporate proxy.
 >
+> **Re-verified at `aedf89ed` (2026-08-25), 23 commits on from `2b8be982`: every open issue
+> above is still open.** That upgrade added the GKE Helm chart work, a `grok-build` harness,
+> and a `DefaultHarnessAuth` setting; none of it touches the areas these issues live in. The
+> checks were made against the files each issue cites, not from memory — for example issue 1's
+> two scripts still pin `go1.23.0`, and issue 21's `backupSigningKeyToStore` still assigns
+> `EncryptedValue = encodedValue` directly.
+>
 > One thing worth flagging from the latest round: **PR #1205 ("add shellcheck gate and fix
 > existing findings") edited eight files under `scripts/starter-hub/`**, including the two
 > scripts most of this report concerns. Those edits were pure lint hygiene — `# shellcheck`
@@ -621,6 +628,13 @@ Authorization for project creation is intact and unrelated: the seeded
 `hub-member-create-projects` policy grants `project: create` at hub scope to the `hub-members`
 group, and clicking through the toast creates the project normally.
 
+**Mechanism, confirmed at `aedf89ed`.** The page's own handler already treats the failure as
+non-fatal — `checkGitHubApp()` does `if (!res.ok) return;` inside a `try/catch`. The toast does
+not come from the caller at all. `apiFetch` (`web/src/client/api.ts`) dispatches a
+`scion:access-denied` event on **every** 403 before returning, and the app shell renders it.
+So no amount of caller-side handling suppresses it — the fix has to be in the wrapper or the
+call has to not happen for non-admins.
+
 **Suggested fix:** skip the call for non-admins, or let this specific failure degrade quietly —
 it only gates an optional workspace type. More generally, a 403 from a background capability
 probe should not surface as a modal-level error; scoping error toasts to user-initiated
@@ -985,6 +999,14 @@ Combined with issue 3, an operator can write a setting, restart, see the hub com
 healthy, and never learn their configuration was discarded. We only caught it by
 diffing the file before and after startup.
 
+**Re-tested at `aedf89ed`, and the result is partly inconclusive — worth stating plainly.**
+We appended an unknown top-level key to a live `settings.yaml` and restarted. The key was
+**not** removed, and **no warning was logged**. The no-warning half of this issue therefore
+still stands. The dropping half we could not reproduce this time: the rewrite is what discards
+unknown keys, and on this hub `server.broker.broker_id` is already present, so no rewrite was
+triggered. We are leaving the issue open rather than claiming either outcome — the silent
+acceptance of an unrecognised key is confirmed, the discarding is not re-confirmed.
+
 **Suggested fix:** log at WARN for each unrecognised key encountered during load.
 Cheap to implement, and it turns a silent misconfiguration into an obvious one.
 
@@ -1090,8 +1112,12 @@ But **nothing an operator can reach ever sets `archived`**. The only writer is
 `ArchiveObsoleteBundledHarnessConfigs`, which archives configs dropped from the binary — not
 ones an operator wants to hide. We ended up setting `status='archived'` directly in SQLite and
 moving the four unwanted directories out of `~/.scion/harness-configs/`, which held across a
-restart. That is not something an operator should have to do, and we would not expect it to
-survive an upgrade that re-seeds bundled configs.
+restart. That is not something an operator should have to do.
+
+**Update — it did survive an upgrade.** We later moved the hub from `2b8be982` to `aedf89ed`,
+a 23-commit jump that *added* a `grok-build` harness, and all four archived configs stayed
+archived. So the workaround is more durable than we expected. It is still a workaround: it
+requires writing to the hub's database by hand, and nothing in the product surfaces it.
 
 **Suggested fix:** expose the existing `archived` status — `harness-config disable/enable`, or
 an admin toggle — and give bundled harness configs the same tombstone treatment policies got in

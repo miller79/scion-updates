@@ -685,6 +685,102 @@ capability once and render an explicit "admin only" state instead of failing per
 general fix in issue 25 — not letting background probes raise global error toasts — covers the
 toast half of this too.
 
+### 30. Chat is enabled by default but its backing store is not, so the UI renders and every send 503s 🟠
+
+A member opened Scion Chat, selected their agent, typed a message, and got a red
+**"Chat not available"** above the composer. The agent showed *Working*, the roster listed it,
+the page looked entirely functional.
+
+The hub logged:
+
+```
+ERROR  API Error  status=503  code=SERVICE_UNAVAILABLE  message="Chat not available"
+```
+
+This is **not** an authorization problem, which is where we looked first — the chat routes
+answer `401` rather than `404`, so they are registered, and unrelated chat polling
+(`/api/v1/chat/dms`) was authenticating fine throughout.
+
+The 503 comes from a nil store:
+
+```go
+s.mu.RLock()
+wcs := s.webChatStore
+s.mu.RUnlock()
+
+if wcs == nil {
+    writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Chat not available", nil)
+    return
+}
+```
+`pkg/hub/handlers_chat_v2.go:418` — and at four other call sites in the same file.
+
+**Two independent switches, defaulting opposite ways.** `nativeChatEnabled()` defaults to
+**true** when unset:
+
+```go
+if s.config.NativeChatEnabled == nil {
+    return true
+}
+```
+
+so the routes register and the UI ships. But `SetWebChatStore` is only ever called from one
+place — inside the message broker's startup block in `cmd/server_foreground.go:609` — and that
+block is gated on:
+
+```go
+if vs.Server.MessageBroker != nil && vs.Server.MessageBroker.Enabled {
+```
+
+with `Enabled bool // Default false`. So out of the box chat is *on*, its store is *nil*, and
+every send fails. Nothing at startup says so; `/healthz` is 200 throughout.
+
+The message on screen is also the least useful of the available truths. "Chat not available"
+is what an operator sees after they have already enabled chat — it names the feature that *is*
+enabled rather than the subsystem that is not.
+
+### The fix is one key, and the schema does not allow it
+
+Adding this to `settings.yaml` and restarting fixes it completely:
+
+```yaml
+server:
+    message_broker:
+        enabled: true
+```
+
+We ran it. The broker came up on the default in-process adapter — no NATS, no external
+dependency:
+
+```
+Message broker spoke added: name=web channel_id=web observer=true
+Message broker proxy started
+Message broker started: fan-out with 2 spoke(s)
+```
+
+But `server.message_broker` **is not in the settings schema**. `settings-v1.schema.json`
+declares:
+
+```
+server.additionalProperties: false
+server properties: auth, broker, database, env, hub, log_format, log_level,
+                   oauth, scheduler, secrets, storage
+```
+
+Neither `message_broker` nor `native_chat` appears, though both exist on `V1ServerConfig` in
+`pkg/config/settings_v1.go`. The chart's `values.schema.json` does not mention
+`message_broker` either. So the one key that turns chat on is a key the published schema
+forbids. In our case it was accepted and worked — the schema is evidently not enforced on this
+load path — but anyone validating their config against the schema, or generating it from the
+new GKE chart, has no supported way to express it.
+
+**Suggested fix:** three small things, any of which would have saved the trip. Default
+`native_chat.enabled` to *false* unless the broker is enabled, or have the chat routes report
+the real reason ("message broker disabled") instead of "Chat not available". Log a line at
+startup when chat is enabled without a store. And add `message_broker` and `native_chat` to
+`settings-v1.schema.json`, since `additionalProperties: false` currently makes a working
+configuration an invalid one.
+
 ## Things that block a deployment
 
 ### 1. Hardcoded Go version no longer satisfies `go.mod` 🟠
@@ -1330,6 +1426,7 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 30 | Chat ships enabled with a nil store when the message broker is off; add `message_broker`/`native_chat` to the settings schema | High | Low |
 | 28 | Hide the hub-level Metrics view from non-admins, or render an explicit admin-only state | High | Trivial |
 | 29 | Do not enable the cloud telemetry exporter without a resolvable service account; WARN once and back off | High | Low |
 | 26 | Expose the existing `archived` status so harnesses can be hidden; tombstone bundled configs so delete sticks | High | Low |

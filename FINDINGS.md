@@ -12,9 +12,11 @@ few of these look like real bugs rather than just "our setup is unusual".
 > **A note on freshness:** we deployed at `90bf246e`, then pulled 24 commits (through PR
 > #1201), then a further 16 (through PR #1217) — rebuilding and re-checking every item each
 > time. **All 19 issues below are still present in `1933d359`.** We later pulled through
-> `89ed0fe8` and added issues 20-25. Issues 20-23 surfaced while moving the hub onto GCP
-> Secret Manager and GCS object storage; 24 and 25 surfaced when agent creation broke
-> for three days and the hub reported nothing wrong throughout.
+> `89ed0fe8` and added issues 20-25, then through `2b8be982` and added issues 26-27.
+> Issues 20-23 surfaced while moving the hub onto GCP Secret Manager and GCS object storage;
+> 24 and 25 surfaced when agent creation broke for three days and the hub reported nothing
+> wrong throughout; 9 was substantially rewritten and 26-27 added while rebuilding all
+> container images from source behind a corporate proxy.
 >
 > One thing worth flagging from the latest round: **PR #1205 ("add shellcheck gate and fix
 > existing findings") edited eight files under `scripts/starter-hub/`**, including the two
@@ -986,28 +988,140 @@ diffing the file before and after startup.
 **Suggested fix:** log at WARN for each unrecognised key encountered during load.
 Cheap to implement, and it turns a silent misconfiguration into an obvious one.
 
-### 9. No way to inject a package registry into the build 🟡
+### 9. The image build cannot be pointed at an internal package registry 🟠
 
-`make web` runs `npm install` against whatever registry is configured. Behind
-corporate egress, direct `registry.npmjs.org` tarball fetches were reset, and npm
-surfaced this as:
+Originally filed as an `npm install` annoyance in `make web`. It is broader than that: **the
+container image build has no way to reach an internal mirror**, and on a network that blocks
+public registries it stops the build outright.
+
+Six of the eleven images fetch from a language package manager — `core-base` and the
+`claude`, `codex`, `gemini-cli` and `opencode` harnesses run `npm install -g`; `hermes` runs
+`pip install`. All of them address the public registry directly:
 
 ```
-npm error Exit handler never called!
+npm error code ECONNRESET
+npm error network request to https://registry.npmjs.org/chrome-devtools-mcp failed
 ```
 
-— which names npm itself as the culprit. The real cause was only visible in
-`~/.npm/_logs/*-debug-0.log`: ~15 concurrent `.tgz` fetches all failing `ECONNRESET`.
-Package *metadata* succeeded and ~197 packages installed first, which made it look
-like a partial/flaky install rather than a network policy problem.
+```
+ERROR: Could not find a version that satisfies the requirement hermes-agent[vertex]
+       (from versions: none)
+```
 
-We fixed it with a `.npmrc` in the service user's home. Worth noting the hub's own
-"rebuild-web" maintenance task depends on that file existing there — an operator who
-sets the registry only in their own shell will find in-app rebuilds broken later.
+`core-base` is the root of the DAG, so this is not a partial failure — **none of the eleven
+images build**. Worth noting that `deb.debian.org`, `dl.k8s.io`, `go.dev` and
+`raw.githubusercontent.com` all succeeded in the same build. Only npm and pip are affected.
 
-**Suggested fix:** document the corporate-registry case in the starter-hub README,
-and mention that `.npmrc` must live in the *service user's* home for maintenance
-tasks to work.
+### The fix is small, and we have it running
+
+Because every image descends from `core-base`, a single `ENV` there covers the whole DAG —
+and agents at runtime as well:
+
+```dockerfile
+# Optional npm mirror. Defaults to the public registry, so behaviour is
+# unchanged when unset.
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
+```
+
+with a matching passthrough in `image-build/scripts/lib/targets.sh` so the orchestrator emits
+the build-arg only when `NPM_REGISTRY` is set.
+
+**The credential must not be a build-arg.** Mirrors generally require authentication, and a
+build-arg is recoverable from `docker history` — publishing those images would leak the
+token. A BuildKit secret keeps it out of every layer:
+
+```dockerfile
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false npm install -g chrome-devtools-mcp
+```
+
+fed by `--secret id=npmrc,src=...` in the local-docker and local-podman builders, gated on an
+optional `NPM_CONFIG_FILE`. `required=false` keeps unauthenticated builds working unchanged.
+We verified the token does not survive into the images (`docker history | grep -c authToken`
+→ `0`).
+
+With those changes all npm-based images build against an internal Artifactory mirror. `hermes`
+still fails — the same treatment for `PIP_INDEX_URL` would close it, and we have not written
+that half.
+
+**One trap worth documenting for anyone doing this.** Our mirror returns **404 for any package
+not already in its cache**, and only an *authenticated* request causes it to fetch from
+upstream. An unauthenticated build therefore fails with `E404 ... is not in this registry` —
+indistinguishable from "this package does not exist". We lost time concluding the packages were
+blocked by policy before testing a known-good package cold and watching it go
+`404 anonymous → 200 authenticated → 200 anonymous`. If the docs mention the mirror case at
+all, this failure mode is worth a sentence.
+
+**Suggested fix:** take the `ARG NPM_REGISTRY` / secret-mount pattern above (happy to send it
+as a PR), add the `pip` equivalent for `hermes`, and document both in the image-build README.
+
+### 26. No supported way to hide a harness config, and deleting one reverts on restart 🟠
+
+A hub ships eight global harness configs. Most teams use two or three, but every one of them
+appears in the agent-creation picker, including harnesses whose images the operator never
+built — picking one of those produces a runtime failure rather than a clear "not available".
+
+There is no disable or hide operation. The CLI offers `scion harness-config delete <name>`,
+but for a bundled config that does not stick: `BootstrapHarnessConfigsFromDir`
+(`pkg/hub/harness_config_bootstrap.go`) re-imports any directory present under
+`~/.scion/harness-configs/` whose row is missing —
+
+```go
+if existing == nil {
+    if err := s.bootstrapSingleHarnessConfig(ctx, name, dirPath, hcDir, stor); err != nil {
+```
+
+— so the config is deleted, the hub restarts, and it comes straight back. This is the same
+shape as issue 16's seeded-policy problem, which `65482def` (#1254) fixed for policies with an
+`Origin` field and deletion tombstones. Harness configs did not get that treatment.
+
+The schema already has what is needed. `harness_configs.status` accepts
+`pending | active | archived`, and the list handler filters to active by default:
+
+```go
+// Default to active harness configs only
+if filter.Status == "" {
+    filter.Status = store.HarnessConfigStatusActive
+}
+```
+`pkg/hub/harness_config_handlers.go:170`
+
+But **nothing an operator can reach ever sets `archived`**. The only writer is
+`ArchiveObsoleteBundledHarnessConfigs`, which archives configs dropped from the binary — not
+ones an operator wants to hide. We ended up setting `status='archived'` directly in SQLite and
+moving the four unwanted directories out of `~/.scion/harness-configs/`, which held across a
+restart. That is not something an operator should have to do, and we would not expect it to
+survive an upgrade that re-seeds bundled configs.
+
+**Suggested fix:** expose the existing `archived` status — `harness-config disable/enable`, or
+an admin toggle — and give bundled harness configs the same tombstone treatment policies got in
+#1254 so a delete is not silently undone.
+
+### 27. The image build cannot target a single image, so one broken image blocks the rest 🟡
+
+`build-images.sh --target` accepts only groups:
+
+```
+Error: unknown --target 'scion-opencode'
+Allowed: core-base thick-prep scion-base harnesses hub common all thick
+```
+
+Steps run in a fixed order and the run aborts on the first failure. `hermes` sorts before
+`opencode`, so when `hermes` failed on its `pip install` (issue 9) the run stopped and
+`opencode` and `scion-hub` were never attempted — despite having nothing to do with the
+failure and being perfectly buildable.
+
+There is no `--only`, no skip-on-failure, and no resume. To get the one image we needed we
+dropped to a hand-written `docker build`, reproducing the `BASE_IMAGE` wiring that
+`step_build_args` normally computes — easy to get subtly wrong, and it bypasses the tag
+scheme the orchestrator applies.
+
+This matters more in an enterprise than upstream, because the images likeliest to fail are the
+ones reaching a blocked registry, and they take unrelated images down with them.
+
+**Suggested fix:** let `--target` accept any step id (the ids already exist in
+`step_dockerfile`/`step_parent`), and/or add `--continue-on-error` so one bad image does not
+abort the rest of the group.
 
 ### 10. Minor items 🟡
 
@@ -1086,9 +1200,11 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 26 | Expose the existing `archived` status so harnesses can be hidden; tombstone bundled configs so delete sticks | High | Low |
 | 6 | Fix dev-auth cleanup user (`scion@localhost`) | Medium | Trivial |
-| 9 | Document corporate npm registry setup | Medium | Low |
+| 9 | Accept an internal package registry in the image build; without it no image builds at all (patch available) | High | Low |
 | 23 | Accept both `gcp_project_id` and `gcpProjectId`, or warn on wrong casing | Medium | Low |
+| 27 | Let `--target` accept a single image id; add `--continue-on-error` | Medium | Low |
 | 19 | Accept a zip upload for template import (extractor already exists) | Low (feature) | Low |
 | 10 | `--version` alias; drop NATS; placeholder registry | Low | Low |
 

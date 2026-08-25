@@ -31,8 +31,8 @@ attribution needed, no need to ask.
 | [**updates/**](updates/) | A dated entry per working day: what we did, what we found, what we got wrong. |
 | [**role-model-proposal/**](role-model-proposal/) | A target-state proposal for roles and permissions — not a description of current behaviour. |
 
-Latest: [**2026-08-24**](updates/2026-08-24.md) — Secret Manager, and a three-day outage with
-two wrong hypotheses before the right one.
+Latest: [**2026-08-25**](updates/2026-08-25.md) — rebuilding every container image behind a
+corporate proxy, and half an hour spent believing a 404 was a policy decision.
 
 ## Fixed since we started reporting
 
@@ -66,6 +66,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 2 | `gce-start-hub.sh` does `git push origin main`, which nobody outside the repo can do | 🔴 Blocking | Low |
 | 4 | The OIDC guide gives a redirect URI route that doesn't exist | 🔴 Blocking | Trivial |
 | 25 | Create Project shows a permission error to every non-admin on page load, before they touch anything | 🟠 High | Trivial |
+| 26 | No way to hide an unused harness, and `harness-config delete` silently reverts on restart | 🟠 High | Low |
 | 14 | Settings template misses `telemetry.cloud.gcp_project_id`, so the metrics dashboard is dead | 🟠 High | Trivial |
 | 15 | Provision script grants `logging.viewer` but not `monitoring.viewer` | 🟠 High | Trivial |
 | 12 | `SCION_HUB_ENDPOINT` in `hub.env.sample` isn't wired to anything | 🟠 High | Trivial |
@@ -75,7 +76,8 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 7 | No real path for internal-only / bring-your-own-cert / IAP setups | 🟠 High | Medium |
 | 23 | The same config field is spelled `gcp_project_id` or `gcpProjectId` depending on where you set it; the wrong one is silently dropped | 🟡 Medium | Low |
 | 6 | Dev-auth cleanup command deletes the wrong username (so, nothing) | 🟡 Medium | Trivial |
-| 9 | Nothing documented for pointing the build at a corporate package registry | 🟡 Medium | Low |
+| 9 | The image build cannot be pointed at an internal package registry — behind one, **no image builds at all**. Patch available | 🟠 High | Low |
+| 27 | Image build can only target groups, so one unbuildable image blocks unrelated ones | 🟡 Medium | Low |
 | 19 | No way to import a template except from a URL or server-side files — no zip upload *(feature request)* | 🟡 Low | Low |
 | 10 | Small stuff: no `--version` alias, NATS still installed, a placeholder registry that looks real | 🟡 Low | Low |
 
@@ -92,7 +94,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 25 items" is easy to write and harder to trust:
+Worth saying, since "we found 27 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms
@@ -101,7 +103,10 @@ Worth saying, since "we found 25 items" is easy to write and harder to trust:
 - Claims we got wrong are **corrected in place**, with the evidence that disproved them. The
   Go-version mismatch was overstated in an early draft; the three-day outage in issue 24 was
   attributed to two different wrong causes before the right one, and the daily entry records
-  that sequence rather than presenting the final answer as if it had been obvious
+  that sequence rather than presenting the final answer as if it had been obvious. On
+  2026-08-25 we spent half an hour convinced a set of 404s was a deliberate policy blocking AI
+  CLI packages; a cold-cache control test disproved it, and the write-up leads with the wrong
+  turn rather than burying it
 - Where a test turned out to be **inconclusive**, we said that instead of claiming a result
 - For issue 16 we went further and **tested a candidate fix on a live hub**, with before/after
   numbers and an explicit note on what we did and did not exercise

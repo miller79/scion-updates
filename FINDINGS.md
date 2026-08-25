@@ -858,7 +858,28 @@ can produce an inheritable credential at all. A hub-side warning when an agent c
 user-scoped secret that its own progeny will not be able to read would have made this visible
 immediately.
 
-**Workaround, verified reasoning but not yet exercised end-to-end:** create the user-scoped
+**Confirmed empirically.** We set `allow_progeny = 1` and rewrote `created_by` to the bare
+user UUID on the existing secret. Progeny agents created afterwards resolve correctly:
+
+```
+implementer  20:52:27  ancestry=2  harnessAuth='auth-file'   noAuth=—
+analyst      20:51:57  ancestry=2  harnessAuth='auth-file'   noAuth=—
+(before)               ancestry=2  harnessAuth='none'        noAuth=true
+```
+
+and the credential file is delivered into the containers (`/home/scion/.copilot/config.json`,
+mode 600). Changing those two columns — and nothing else — is what moved it, which confirms
+both blockers above are real and that they are the only two remaining after #1292.
+
+**The symptom to recognise.** Before the fix the failure surfaced as a complaint about
+`COPILOT_GITHUB_TOKEN` not existing, which is misleading: that key belongs to the *other* auth
+type. Copilot declares `default_type: api-key` (requiring `COPILOT_GITHUB_TOKEN`) alongside
+`auth-file` (requiring `COPILOT_CONFIG`), with autodetect mapping `COPILOT_CONFIG → auth-file`.
+When the progeny lookup finds nothing, resolution falls back to `default_type`, and the user is
+told a token is missing for an auth type they never chose. Anyone hitting this will search for
+the wrong thing.
+
+**Workaround, now exercised end-to-end:** create the user-scoped
 secret from the **web UI** with "allow progeny" enabled rather than via Capture Auth. That
 yields `created_by = <bare user UUID>` (in the ancestry) and `allow_progeny = 1`, satisfying
 both conditions. Project-scoping the credential also works and sidesteps progeny entirely,

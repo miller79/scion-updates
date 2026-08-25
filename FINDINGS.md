@@ -781,6 +781,90 @@ startup when chat is enabled without a store. And add `message_broker` and `nati
 `settings-v1.schema.json`, since `additionalProperties: false` currently makes a working
 configuration an invalid one.
 
+### 31. Progeny agents still cannot inherit captured credentials after #1292 — two further blockers 🔴
+
+An orchestrator creates sub-agents; the sub-agents come up unauthenticated. Preston diagnosed
+this and shipped `4b683622` ("make hasAnyKey progeny-aware", #1292, closing #1252): for a
+progeny agent, `agent.OwnerID` is the *creating agent's* ID, so the user-scope lookup misses,
+`NoAuth` is set preemptively, and the working `ListProgenySecrets()` path never runs.
+
+**That fix is correct, it is deployed here, and the symptom persists.** We upgraded to
+`aedf89ed` (which contains it) at 19:41 and the progeny agents below were created at 20:32 —
+after the fix, still with no credentials. Two further conditions have to hold, and neither does.
+
+The state, straight from the hub database:
+
+```
+agents (created 20:32, by the orchestrator)
+  owner_id = b77a535e…            ← the orchestrator agent, as #1292 describes
+  ancestry = ["4d72d36b-…"]  → for progeny: ["4d72d36b-…", "b77a535e-…"]   (len 2 ✓)
+
+secrets
+  COPILOT_CONFIG  scope=user     scope_id=4d72d36b-…(the user)
+                  created_by='agent:da73beb6-…'   allow_progeny=0
+```
+
+`hasAnyKey`'s new progeny branch calls `ListProgenySecrets(ctx, agent.Ancestry)`, which is:
+
+```go
+s.client.Secret.Query().Where(
+    entsecret.ScopeEQ(store.ScopeUser),
+    entsecret.AllowProgenyEQ(true),
+    entsecret.CreatedByIn(ancestorIDs...),
+)
+```
+`pkg/store/entadapter/secret_store.go:294`
+
+**Blocker 1 — `allow_progeny` is 0, and the capture flow cannot set it.** The web UI can:
+`secret-list.ts` sends `allowProgeny` for user-scoped secrets, and the API accepts it
+(`handlers_env_secrets.go:918`). But `sciontool secret set` exposes only `--type`, `--target`,
+`--force` and `--scope`:
+
+```
+secretSetCmd.Flags().StringVar(&secretScope, "scope", "", "Secret scope: project (default) or user")
+```
+`cmd/sciontool/commands/secret.go:248-251`
+
+`capture_auth.py` shells out to exactly that command. So a credential captured through the
+documented Capture Auth flow is **always** written with `allow_progeny = 0` and can never be
+inherited, no matter what the hub does.
+
+**Blocker 2 — `created_by` can never match the ancestry, by format.** Agent-authored secrets
+are written as:
+
+```go
+CreatedBy: fmt.Sprintf("agent:%s", agentID),
+```
+`pkg/hub/handlers_env_secrets.go:1211`
+
+while `ancestry` holds bare UUIDs (`["4d72d36b-35fa-…"]`, verified in the DB). `CreatedByIn`
+does a literal `IN`, and we found no normalisation of the `agent:` prefix anywhere in the
+secret path — the `TrimPrefix(…, "agent:")` calls in the tree are all in messaging and chat.
+
+So `"agent:b77a535e-…"` is compared against `"b77a535e-…"` and never matches. Even with
+`allow_progeny = 1`, and even if the *same* orchestrator captured the credential, an
+agent-created secret cannot satisfy this query. Only a secret created by a **user** —
+`createdBy = userIdent.ID()`, a bare UUID (`handlers_env_secrets.go:395`) — can.
+
+Which means #1292's progeny branch is currently reachable only for credentials created through
+the UI, and never for credentials captured by an agent, which is the flow the feature exists to
+serve.
+
+**Suggested fix:** normalise the prefix in `ListProgenySecrets` / `ListProgenyEnvVars` (compare
+`TrimPrefix(created_by, "agent:")` against the ancestry, or store ancestry and `created_by` in
+one consistent form) — that is the actual bug. Then add `--allow-progeny` to
+`sciontool secret set` and a `--progeny` pass-through in `capture_auth.py`, so the capture flow
+can produce an inheritable credential at all. A hub-side warning when an agent creates a
+user-scoped secret that its own progeny will not be able to read would have made this visible
+immediately.
+
+**Workaround, verified reasoning but not yet exercised end-to-end:** create the user-scoped
+secret from the **web UI** with "allow progeny" enabled rather than via Capture Auth. That
+yields `created_by = <bare user UUID>` (in the ancestry) and `allow_progeny = 1`, satisfying
+both conditions. Project-scoping the credential also works and sidesteps progeny entirely,
+since `hasAnyKey` checks `project` scope directly — at the cost of sharing it with everyone in
+the project.
+
 ## Things that block a deployment
 
 ### 1. Hardcoded Go version no longer satisfies `go.mod` 🟠
@@ -1407,6 +1491,7 @@ Ordered by priority, not by issue number.
 | # | Change | Severity | Effort |
 |---|---|---|---|
 | **13** | **Drop `--session-secret` from the systemd template — it exposes the cookie signing secret via `ps`** | **Security** | **Trivial** |
+| **31** | **Progeny credential inheritance is unreachable for agent-captured secrets: `created_by` carries an `agent:` prefix the ancestry match does not strip** | **Blocking** | Low |
 | **11** | **Local backend stores plaintext while its comment claims writes are rejected** | **Security** | Low–Med |
 | **16** | **All authenticated users can read all projects by default; `visibility` is inert** | **Security** | Low |
 | **17** | **`viewer` role implies a restriction it does not enforce** | **Security** | Low |

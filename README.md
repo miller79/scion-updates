@@ -55,6 +55,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 
 | # | Issue | Severity | Effort |
 |---|---|---|---|
+| 31 | Progeny agents still get no credentials after the #1292 fix — `created_by` is `agent:<uuid>` but ancestry holds bare UUIDs, so the match never fires | 🔴 **Security** | Low |
 | 13 | `--session-secret` in the systemd template leaks the signing secret into `ps` — and now also undermines 11's encryption-at-rest fix, which derives its key from it | 🔴 **Security** | Trivial |
 | 21 | Secret Manager values are rewritten to SQLite in cleartext on every boot; the signing keys bypass 11's encryption entirely | 🔴 **Security** | Low |
 | 20 | `hub_id` derives from the hostname; a hostname change silently re-namespaces every secret | 🔴 **Security** | Low |
@@ -97,7 +98,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 30 items" is easy to write and harder to trust:
+Worth saying, since "we found 31 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms

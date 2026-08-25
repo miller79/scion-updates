@@ -3,7 +3,7 @@
 *Anthony Lofton — August 2026*
 
 We stood up a Scion Hub on an internal-only GCE VM (Ubuntu 24.04) with Keycloak SSO and TLS
-handled by an F5 BIG-IP. Running `main` @ `1933d359`.
+handled by an F5 BIG-IP. Running `main` @ `89ed0fe8`.
 
 **It works.** But we hit enough snags getting there that it seemed worth writing down —
 partly so the next person in a similar environment has an easier time, and partly because a
@@ -11,7 +11,10 @@ few of these look like real bugs rather than just "our setup is unusual".
 
 > **A note on freshness:** we deployed at `90bf246e`, then pulled 24 commits (through PR
 > #1201), then a further 16 (through PR #1217) — rebuilding and re-checking every item each
-> time. **All 19 issues below are still present in `1933d359`.**
+> time. **All 19 issues below are still present in `1933d359`.** We later pulled through
+> `89ed0fe8` and added issues 20-25. Issues 20-23 surfaced while moving the hub onto GCP
+> Secret Manager and GCS object storage; 24 and 25 surfaced when agent creation broke
+> for three days and the hub reported nothing wrong throughout.
 >
 > One thing worth flagging from the latest round: **PR #1205 ("add shellcheck gate and fix
 > existing findings") edited eight files under `scripts/starter-hub/`**, including the two
@@ -39,16 +42,29 @@ this came to light.
 
 Issues are numbered in the order we found them — the table at the end is sorted by priority
 instead. Numbers 11–19 came later, while we were hardening things for a wider test group and
-trying to get telemetry working.
+trying to get telemetry working. Numbers 20–25 came later still, when we moved secrets
+into GCP Secret Manager and storage into a GCS bucket — that migration is where the two
+most serious items in this report turned up.
 
-**If you only look at three:** **13** and **11** are the security ones, and **13 is a
-one-line fix**. **2** is the one that stops a stock deployment dead at step 1.
+**If you only look at a few:** **13**, **11**, **20** and **21** are the security ones.
+**13 is a one-line fix.** **20** can orphan every secret you have stored, without an
+error. **21** is the reason **11**'s natural remedy — "switch to Secret Manager" — only
+half-works. **2** is the one that stops a stock deployment dead at step 1.
 
 ---
 
 ## Security issues
 
 ### 11. The local secrets backend silently stores plaintext, contradicting its own comment 🔴
+
+> **Resolved in `af102183` (#1253), verified at `2b8be982`.** The local backend now encrypts
+> at rest with AES-256-GCM behind an `enc:v1:` prefix, legacy plaintext is detected and read
+> back for compatibility, and the misleading comment quoted below has been corrected. Left in
+> place for the record, and because two caveats follow from the fix: the encryption key is
+> derived from the deployment-wide shared signing secret, so issue **13** — which exposes that
+> secret via `ps` — now undermines encryption at rest rather than being an independent nit;
+> and the signing-key write-back in issue **21** bypasses this path entirely, leaving those
+> two values as the remaining plaintext in an otherwise-encrypted table.
 
 `pkg/secret/secret.go` declares:
 
@@ -131,6 +147,15 @@ the exposure. We verified this in place: no `--session-secret` in `ps`, and no
 The same argument applies to `--storage-bucket`, though a bucket name is not sensitive.
 
 ### 16. Every authenticated user can read every project by default 🔴
+
+> **Partially addressed in `65482def` (#1254), verified at `2b8be982`.** Deleting a seeded
+> policy now sticks: policies carry an `Origin`, and a deletion records a
+> `seed.policy.deleted.<name>` tombstone the seeder honours. That closes the trap described
+> below, where the wildcard silently returned on restart — the commit message cites it as "a
+> real customer issue where project-isolation gaps could not be fixed by policy deletion".
+> **The default is unchanged:** `hub-member-read-all` with `ResourceType: "*"` is still seeded
+> on every fresh hub, so a new deployment is still open-by-default. The workaround is now
+> supported; the posture is not yet safe out of the box.
 
 On first startup `pkg/hub/seed.go` creates this policy:
 
@@ -372,6 +397,233 @@ want to remove.
 
 ---
 
+### 20. `hub_id` defaults to a value derived from the hostname, silently re-namespacing every secret 🔴
+
+When `server.hub.hub_id` is not set, the hub derives it from the machine's hostname. That id
+is not cosmetic — it is the namespace for both secret storage and object storage.
+
+Secret names are built in `pkg/secret/gcpbackend.go`:
+
+```go
+// Format: scion-{scope}-{sha256(hubID:scopeID)[:12]}-{name}
+```
+
+and GCS objects are written under `hubs/<hub_id>/...`.
+
+A GCE instance reports a short hostname early in boot and its fully-qualified name once the
+metadata-driven hostname is applied. A routine stop/start flipped ours, and the hub id
+changed with it. Because the id feeds a hash, a one-character hostname difference produces a
+completely unrelated namespace:
+
+```
+hub_id  <id A>  ->  secrets under  scion-hub-<hash A>-*
+hub_id  <id B>  ->  secrets under  scion-hub-<hash B>-*
+```
+
+The consequence is that **every secret the hub previously wrote becomes unreachable**, and
+the signing keys are re-derived — invalidating every session and agent token. Nothing fails
+loudly. The hub starts, reports healthy, and quietly operates on an empty namespace.
+
+There is a warning, but it fires only when a storage bucket is configured
+(`cmd/server_foreground.go`), it is one `WARN` among several hundred startup lines, and it
+frames the risk as being about "multi-hub deployments" rather than "your secrets are about to
+be orphaned":
+
+```
+storage: hub_id was auto-generated from hostname; set an explicit hub_id in settings for
+multi-hub deployments
+```
+
+We caught it only because we were reading the startup log for an unrelated reason. Pinning
+`hub_id` fixed it, and the warning disappeared.
+
+
+**Suggested fix:** persist the generated `hub_id` to `settings.yaml` on first boot and reuse
+it thereafter, so stability is structural rather than something the operator has to know to
+ask for. Failing that, refuse to start when a secrets or storage backend is configured and
+`hub_id` is unset — a soft warning is not proportionate to losing access to every stored
+secret. At minimum, reword it to say what is actually at stake.
+
+### 21. Enabling Secret Manager does not remove plaintext from SQLite — it is rewritten on every boot 🔴
+
+This is issue 11's sibling, and it undercuts the usual remedy for it.
+
+`GCPBackend.Set()` deliberately clears the local copy:
+
+```go
+secret.EncryptedValue = "" // Don't store value in DB
+secret.SecretRef = "gcpsm:" + fullName
+```
+
+The hub then puts it straight back. In `pkg/hub/server.go`, immediately after a successful
+sync:
+
+```go
+// Re-persist the actual value to SQLite as backup. The backend's Set() stores
+// EncryptedValue="" (using a SecretRef), so without this the key material
+// would be lost if the secret backend becomes unavailable.
+if persistErr := s.backupSigningKeyToStore(ctx, keyName, encodedValue, hubID); persistErr != nil {
+```
+
+So with `backend: gcpsm` fully working, `agent_signing_key` and `user_signing_key` are still
+present in cleartext in `hub.db`, refreshed on every start. We verified this on a live hub:
+the rows carry both a valid `secret_ref` *and* the raw value.
+
+We tried purging the values. They came back on the next restart — which is correct behaviour
+given the code. The point is that an operator has no reachable state in which the hub's
+internal keys live only in Secret Manager.
+
+The comment is honest about the trade-off and the reasoning is defensible: it protects
+against a wiped database. But the effect is that adopting a managed secret store does not
+deliver the property most people adopt it for. If issue 11 is read as "use gcpsm in
+production", this is the footnote saying it only half-helps.
+
+**Suggested fix:** skip the write-back when the GCP backend is active — Secret Manager is
+already the durable copy, which is the entire premise of using it. If the fallback is worth
+keeping, encrypt the backup with a key not stored beside it, and document that plaintext
+persists locally so operators can make an informed choice.
+
+### 22. Signing keys derive from `SESSION_SECRET`, and there is no documented rotation path 🟠
+
+> **Clarification after re-checking at `2b8be982`.** `docs-site/.../single-node/auth.md`
+> states that "the Hub rotates signing keys every 24 hours automatically, maintaining a key
+> overlap period". That is accurate, but describes a **different key set** — the RS256 OIDC
+> federation keys in `pkg/hub/oidckeys.go`, published via JWKS and used for tokens minted to
+> external audiences. The `agent_signing_key` and `user_signing_key` below are not those keys
+> and have no rotation of any kind. An operator reading that line could reasonably conclude
+> their session signing keys rotate automatically. They do not.
+
+The hub logs its key provenance plainly:
+
+```
+ensureSigningKey: derived from shared signing secret   source=shared_secret
+```
+
+`agent_signing_key` and `user_signing_key` are derived deterministically from
+`SESSION_SECRET`. We confirmed the determinism by accident: across three restarts the derived
+values were byte-identical, and changed only once we rotated `SESSION_SECRET`.
+
+Two consequences worth documenting:
+
+1. **Rotating the signing keys means rotating `SESSION_SECRET`** — they are not independent.
+   That is a larger action than it sounds, because it invalidates every session and agent
+   token at once. There is no staged or partial rotation.
+2. **`SESSION_SECRET` lives in cleartext in `hub.env`** (and, per issue 13, in `ps` output
+   under the stock systemd template). The material every token ultimately derives from is
+   therefore the least protected value in the deployment.
+
+Rotation also leaves the old material behind. Afterwards, Secret Manager held three enabled
+versions, the first two being pre-rotation keys. Nothing disables or destroys them, so
+superseded keys stay readable to anything holding `secretmanager.versions.access` until an
+operator prunes them by hand.
+
+**Suggested fix:** document the rotation procedure, including the logout blast radius and the
+need to prune superseded versions. Longer term, letting the signing keys rotate independently
+of `SESSION_SECRET` would make routine rotation a non-event rather than a scheduled outage.
+
+### 24. The broker's harness-config resolution has two paths, and both can be empty on a hub-only install 🔴
+
+An agent start failed for three days with:
+
+```
+Failed to dispatch to runtime broker: runtime broker returned error 500:
+Failed to start agent: failed to find harness-config "copilot": harness-config "copilot" not found
+```
+
+The harness-config was present the whole time — global scope, `status: active`, twelve files
+listed in the database. What was missing were its *files*, in the places the broker looks.
+
+The broker resolves a harness-config two ways:
+
+1. **Hydrate from the Hub's storage backend** into a content-hash cache, when the dispatch
+   request carries `HarnessConfigID` / `HarnessConfigHash`
+   (`pkg/runtimebroker/handlers.go`, `hydrateHarnessConfig`)
+2. **Fall back to local disk** — `FindHarnessConfigDir` checks the template dir, the project
+   dir, then `~/.scion/harness-configs/<name>` (`pkg/config/harness_config.go`)
+
+The fallback is explicit about being a fallback:
+
+```go
+// Graceful degradation: if hydration fails, fall back to on-disk only.
+```
+
+On a hub-only install both can be empty at once. Nothing populates `~/.scion/harness-configs/`
+— that directory is a CLI-workstation convention, and a host that only ever ran the server
+never gets one. And hydration fails whenever the files are not in the storage backend the hub
+is *currently* configured for, which is exactly what happens after a backend switch, because
+the bundled-resource bootstrap skips harness-configs entirely when rows already exist:
+
+```
+template bootstrap: repairing storage            name=default issues=1
+bundled resource bootstrap: active harness configs exist, skipping harness-config seeding
+```
+
+Templates are verified against storage on every boot and repaired. Harness-configs are not:
+the check is "do rows exist", not "are the files reachable". A repair path does exist
+(`pkg/hub/harness_config_repair.go`) but triggers on content-hash mismatch, and absent files
+never produce a mismatch to detect.
+
+The hydration failure is logged at DEBUG and is the only place the real cause appears:
+
+```
+Env-gather: harness-config hydration failed, falling back to on-disk
+error: failed to download file Dockerfile: download failed with status 404
+```
+
+Four things make this very hard to diagnose:
+
+1. **`/healthz` stays `healthy`** while every agent launch is broken.
+2. **The error names the harness, not the path.** "harness-config not found" reads as a missing
+   or misnamed config — but the row is present and `active`, so the natural first check
+   confirms it exists and points away from storage.
+3. **The failure surfaces at the runtime broker** as a 502 wrapping a 500, so it reads as a
+   broker fault rather than resource resolution.
+4. **The cache masks it unevenly.** The hydrated cache is content-hash keyed and shared across
+   projects, so once any start succeeds, later starts of the same config keep working while
+   uncached ones fail. That makes the failure look like it depends on the project or the user,
+   which sends diagnosis in entirely the wrong direction. Ours was reported as "members can't
+   create agents" and looked like an authorization gap. It was not one — project policies were
+   correct and the authorization check passed. The failure is after authorization, at dispatch.
+
+**Suggested fix:** verify harness-config manifests against the configured storage backend at
+boot and repair what is missing, exactly as templates already are — the repair machinery
+exists, it just is not called on this path. Failing that, raise the hydration-failure log above
+DEBUG, since it is the only signal that names the real cause, and consider surfacing
+unreachable resource files in `/healthz` so a hub whose agents cannot start does not report
+itself healthy.
+
+### 25. The Create Project page calls an admin-only endpoint and shows its 403 as a blocking error 🟠
+
+A non-admin opening **Create Project** sees this immediately, before typing anything:
+
+> You don't have permission to perform this action on this resource.
+
+Project creation is not denied. The page issues `GET /api/v1/github-app` on load — an
+admin-only endpoint, most likely to decide whether to offer a git-backed workspace type
+alongside "Hub-managed Workspace" — and the 403 is rendered as an unscoped global error toast:
+
+```
+GET  /api/v1/github-app   →  authorization denied   reason="not an admin"
+```
+
+There is no `POST /api/v1/projects` in the logs at all when this happens. The user has not
+submitted anything; the form is still empty behind the toast.
+
+The impact is out of proportion to the cause. **Every non-admin sees a permission error every
+time they open the page they are expected to use most**, worded so it appears to refuse the
+action they came to perform. The reasonable response is to stop and report it, which is what
+our users did — and it cost real time, because it arrived alongside an unrelated agent-start
+failure (issue 24) and the two looked like one permissions problem.
+
+Authorization for project creation is intact and unrelated: the seeded
+`hub-member-create-projects` policy grants `project: create` at hub scope to the `hub-members`
+group, and clicking through the toast creates the project normally.
+
+**Suggested fix:** skip the call for non-admins, or let this specific failure degrade quietly —
+it only gates an optional workspace type. More generally, a 403 from a background capability
+probe should not surface as a modal-level error; scoping error toasts to user-initiated
+requests would prevent this class of false alarm.
+
 ## Things that block a deployment
 
 ### 1. Hardcoded Go version no longer satisfies `go.mod` 🟠
@@ -425,6 +677,10 @@ writable. Failing that, at minimum don't make it step 1 of the happy path.
 
 ### 3. `default_runtime` is a dead config key 🟠
 
+> **Appears resolved as of `2b8be982`** — the key is no longer present in `pkg/config`. We
+> confirmed this by search rather than by exercising the config path, so treat it as likely
+> rather than verified.
+
 `gce-start-hub.sh` writes `default_runtime: ${DEFAULT_RUNTIME}` into `settings.yaml`,
 but no such key exists in the Go config schema. The hub **silently strips it** when it
 rewrites the file on startup.
@@ -441,11 +697,22 @@ issue 8 on silent key-dropping.
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
 
+> **Source: the `oidc-setup.md` draft, not a file in this repository.** It was sent to us
+> directly rather than published, so it will not be found under `docs/` or `docs-site/`.
+> Our understanding is that it is a candidate for release — which is why these are worth
+> fixing before it ships rather than after. **Re-confirmed against that draft at
+> `2b8be982`: still present.**
+
 The circulating `oidc-setup.md` instructs registering:
 
 ```
 https://<hub-domain>/api/v1/auth/oidc/callback
 ```
+
+The wrong URI appears **twice** — once in the setup values and again in the troubleshooting
+section, which tells a reader who is already debugging a failed callback to "verify the
+redirect URI matches exactly" against the same wrong value. That closes off the most likely
+route to self-diagnosis.
 
 **That route does not exist.** The actual redirect URI is constructed in
 `pkg/hub/web.go` as `BaseURL + "/auth/callback/" + provider`, with the provider slug
@@ -460,6 +727,12 @@ Anyone following the guide registers the wrong URI in their IdP and gets an opaq
 against an enterprise SSO team.
 
 ### 5. The guide overstates HTTPS as a prerequisite 🟠
+
+> **Source: the `oidc-setup.md` draft, not a file in this repository.** It was sent to us
+> directly rather than published, so it will not be found under `docs/` or `docs-site/`.
+> Our understanding is that it is a candidate for release — which is why these are worth
+> fixing before it ships rather than after. **Re-confirmed against that draft at
+> `2b8be982`: still present.**
 
 `oidc-setup.md` lists "A running Scion Hub instance with HTTPS" under Prerequisites.
 The hub actually adapts — `pkg/hub/web.go` derives the session cookie's `Secure`
@@ -478,6 +751,12 @@ network in cleartext), and required only if your IdP enforces HTTPS redirect URI
 but it is not a functional requirement of the Hub.
 
 ### 6. Dev-auth cleanup targets the wrong user 🟡
+
+> **Source: the `oidc-setup.md` draft, not a file in this repository.** It was sent to us
+> directly rather than published, so it will not be found under `docs/` or `docs-site/`.
+> Our understanding is that it is a candidate for release — which is why these are worth
+> fixing before it ships rather than after. **Re-confirmed against that draft at
+> `2b8be982`: still present.**
 
 The guide says:
 
@@ -526,6 +805,45 @@ obvious cause.
 be much clearer if it noted which convention applies to each, since they look identical.
 
 ---
+
+### 23. The same setting is spelled two different ways depending on where you set it 🟡
+
+`gcp_project_id` and `gcpProjectId` are both correct — for different files.
+
+`settings.yaml` is parsed by the v1 schema, where the secrets block is snake_case:
+
+```go
+// pkg/config/settings_v1.go
+type V1SecretsConfig struct {
+    GCPProjectID string `yaml:"gcp_project_id" koanf:"gcp_project_id"`
+}
+```
+
+Environment variables land in `GlobalConfig`, where the same field is camelCase:
+
+```go
+// pkg/config/hub_config.go
+type SecretsConfig struct {
+    GCPProjectID string `yaml:"gcpProjectId" koanf:"gcpProjectId"`
+}
+```
+
+and `pkg/config/hub_config.go` carries two lookup tables that disagree by design:
+
+```go
+var snakeCaseFields = map[string]string{ "gcpprojectid": "gcp_project_id", ... }
+var camelCaseFields = map[string]string{ "gcpprojectid": "gcpProjectId",   ... }
+```
+
+Neither spelling is wrong; each is right in its own path. But there is no error, no warning,
+and no hint at the point of use — a snake_case key in the camelCase path is simply dropped.
+Adjacent settings make it easy to draw the wrong conclusion: `telemetry.cloud.gcp_project_id`
+in the same `settings.yaml` really is snake_case, so the file appears to establish a
+convention that the env path does not follow.
+
+**Suggested fix:** accept both spellings at the config layer, or warn when a recognised field
+appears under the wrong casing. This compounds issue 8 — unknown keys are already silently
+ignored, so a casing mistake is indistinguishable from a typo.
 
 ## Telemetry does not work out of the box
 
@@ -753,6 +1071,11 @@ Ordered by priority, not by issue number.
 | **16** | **All authenticated users can read all projects by default; `visibility` is inert** | **Security** | Low |
 | **17** | **`viewer` role implies a restriction it does not enforce** | **Security** | Low |
 | **18** | **Per-project member seed omits `project: read` — membership confers no visibility** | **Security** | Low |
+| **20** | **`hub_id` derives from the hostname; a hostname change silently orphans every secret** | **Security** | Low |
+| **21** | **Secret Manager values are rewritten to SQLite in cleartext on every boot** | **Security** | Low |
+| **22** | **Signing keys derive from `SESSION_SECRET`; rotation is undocumented and leaves old versions enabled** | **Security** | Low |
+| **24** | **Harness-config files unreachable in both resolution paths break every agent start, while the hub reports healthy** | **Blocking** | Low |
+| **25** | **Create Project shows a permission error to every non-admin on page load** | **High** | Trivial |
 | 1 | Derive Go version from `go.mod`; add CI drift check | High | Low |
 | 2 | Remove/gate `git push origin main` | Blocking | Low |
 | 4 | Fix OIDC redirect URI in docs → `/auth/callback/oidc` | Blocking | Trivial |
@@ -765,6 +1088,7 @@ Ordered by priority, not by issue number.
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
 | 6 | Fix dev-auth cleanup user (`scion@localhost`) | Medium | Trivial |
 | 9 | Document corporate npm registry setup | Medium | Low |
+| 23 | Accept both `gcp_project_id` and `gcpProjectId`, or warn on wrong casing | Medium | Low |
 | 19 | Accept a zip upload for template import (extractor already exists) | Low (feature) | Low |
 | 10 | `--version` alias; drop NATS; placeholder registry | Low | Low |
 

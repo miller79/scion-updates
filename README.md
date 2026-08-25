@@ -85,12 +85,25 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 19 | No way to import a template except from a URL or server-side files — no zip upload *(feature request)* | 🟡 Low | Low |
 | 10 | Small stuff: no `--version` alias, NATS still installed, a placeholder registry that looks real | 🟡 Low | Low |
 
-**If you only look at four:** **16 and 18** together are what most enterprises will care about —
-all users can read all projects out of the box, and the obvious fix hides projects from their
-own members. **13** is a one-line fix that now also protects the new encryption at rest.
-**24 and 25** are the pair that cost us three days: agent creation broken while the hub
-reported healthy, alongside a false permission error that made it all look like an
-authorization problem.
+**If you only look at four:**
+
+**31** first, because it is live work — the `hasAnyKey` fix in #1292 is correct and deployed
+here, and progeny agents still get no credentials. Three conditions sit behind it, one of them
+a one-line prefix mismatch. Worth seeing before #1252 is closed.
+
+**16 and 18** together are what most enterprises will care about — all users can read all
+projects out of the box, and the obvious fix hides projects from their own members.
+
+**13** is a one-line fix that now also protects the new encryption at rest.
+
+**30** is the cheapest win: chat ships enabled with a nil store whenever the message broker is
+off, so it renders fully and 503s on every send — and the key that fixes it is absent from the
+settings schema.
+
+A pattern worth naming across several of these: **the hub reports healthy while a feature is
+completely non-functional**. Agent creation (24), chat (30), telemetry (29) and progeny
+credentials (31) all fail silently with `/healthz` at 200. In each case a single startup-time
+WARN naming the missing prerequisite would have saved hours.
 
 There's a **"What worked well"** section in there too — the list above is all complaints,
 which isn't a fair picture. `/healthz`, the fail-fast OIDC validation, and the secrets

@@ -1192,6 +1192,62 @@ one an operator naturally takes.
 whose initial clone failed would make the project-scoped secret usable after the fact and close
 the loop entirely.
 
+### 35. Recreating a project with the same name leaves a marker pinned to the deleted project, breaking all agent creation 🔴
+
+After deleting and recreating a git project a few times while debugging a clone, every agent
+creation failed:
+
+```
+Failed to dispatch to runtime broker: runtime broker returned error 500:
+Failed to create agent: workspace directory does not exist:
+/home/scion/.scion/project-configs/connections-ai-ado__3a57faf5/.scion/agents/test/workspace
+(try deleting and recreating the agent)
+```
+
+`3a57faf5` is the id of a project that **no longer exists**. The live project is `bf1c7cfb`.
+
+The cause is a marker file keyed by slug rather than by project id:
+
+```
+$ cat /home/scion/.scion/projects/connections-ai-ado/.scion
+project-id: 3a57faf5-51ae-4afb-b996-6f19946af700
+project-name: connections-ai-ado
+project-slug: connections-ai-ado
+```
+
+`~/.scion/projects/<slug>/` survives project deletion. Creating a project with the same name
+reuses that directory, and nothing rewrites the marker, so the broker resolves the *new*
+project to the *old* project's config directory — `project-configs/<slug>__<old-short-id>/` —
+where the expected agent workspace does not exist.
+
+Once in this state the hub is stuck for that project. Confirming the shape:
+
+```
+project-configs/
+  anthony-s-main-project__1afd7fe5      ← healthy, id matches
+  connections-ai-ado__3a57faf5          ← the deleted project's id
+  (no connections-ai-ado__bf1c7cfb)     ← nothing for the live project
+```
+
+**The remediation the error suggests makes it worse.** "try deleting and recreating the agent"
+cannot help — the agent is not what holds the stale id. And the instinctive next step, deleting
+and recreating the *project*, reproduces the fault exactly, because the marker is untouched by
+both operations. An operator can loop on this indefinitely. We reached it by recreating one
+project five times while debugging something unrelated.
+
+We fixed it by rewriting `project-id` in the marker to the live project and moving the orphaned
+`project-configs/<slug>__<old-id>/` directory aside. Agent creation recovered immediately.
+
+**Suggested fix:** rewrite the marker on project creation rather than only on first creation —
+it is a three-line write and the id is already in hand. Failing that, key the directory by
+project id rather than slug, so a recreated project cannot collide with its predecessor. And
+either way, make the error name the mismatch ("project bf1c7cfb resolved to a config directory
+belonging to 3a57faf5") instead of printing a path and suggesting an action that cannot work.
+
+Worth noting the same class of staleness appears elsewhere: issue 26 (a deleted harness config
+returns on restart because its on-disk directory is re-imported). Deletion consistently removes
+the database row while leaving the filesystem artefact that will resurrect or misdirect it.
+
 ## Docs that are wrong
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
@@ -1813,6 +1869,7 @@ Ordered by priority, not by issue number.
 | # | Change | Severity | Effort |
 |---|---|---|---|
 | **13** | **Drop `--session-secret` from the systemd template — it exposes the cookie signing secret via `ps`** | **Security** | **Trivial** |
+| **35** | **Rewrite the project marker on creation — a recreated project inherits the deleted one's id and all agent creation fails** | **Blocking** | **Trivial** |
 | **33** | **Build the authenticated clone URL with `net/url` instead of `strings.Replace` — any remote with a username currently gets corrupted credentials** | **Blocking** | **Trivial** |
 | **31** | **Progeny credential inheritance is unreachable for agent-captured secrets: `created_by` carries an `agent:` prefix the ancestry match does not strip** | **Blocking** | Low |
 | **11** | **Local backend stores plaintext while its comment claims writes are rejected** | **Security** | Low–Med |

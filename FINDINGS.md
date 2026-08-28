@@ -1082,6 +1082,57 @@ misread it.
 `GIT_TOKEN_<HOST>`) with `GITHUB_TOKEN` kept as a fallback, and make the error guidance name
 the host it actually failed against.
 
+### 34. A project-scoped `GITHUB_TOKEN` can never authenticate the initial clone 🟠
+
+After fixing issue 33 the clone failed differently:
+
+```
+git clone failed (no GITHUB_TOKEN secret configured — the repository may require
+authentication): fatal: could not read Username for 'https://dev.azure.com':
+terminal prompts disabled
+```
+
+The project **did** have a `GITHUB_TOKEN` secret at project scope. It cannot be reached,
+because of ordering:
+
+```go
+// handlers_projects_core.go:506 — inside project creation
+if err := s.cloneSharedWorkspaceProject(ctx, project); err != nil {
+```
+
+The clone runs **as part of creating the project**. A project-scoped secret can only be
+attached once the project exists, which is strictly after the clone has already run. So the
+project-scoped branch of `resolveCloneToken`:
+
+```go
+sv, err := s.secretBackend.Get(ctx, "GITHUB_TOKEN", "project", project.ID)
+```
+
+is unreachable for the initial clone by construction. It can only ever serve later operations.
+
+**There is no retry.** We grepped for a re-clone or retry path and there is none —
+`cloneSharedWorkspaceProject` is called from exactly two places, project creation and project
+cloning. Once the initial clone fails, the only recourse is to delete the project and create it
+again, which produces a new project ID and therefore loses the project-scoped secret again.
+That is a loop an operator can repeat indefinitely without ever succeeding.
+
+The working path is the *user*-scoped fallback:
+
+```go
+// Fall back to the creating user's profile-level GITHUB_TOKEN
+sv, err = s.secretBackend.Get(ctx, "GITHUB_TOKEN", "user", project.CreatedBy)
+```
+
+which exists before any project does. Nothing in the UI or the error message says so. The
+error says "no GITHUB_TOKEN secret configured" while a `GITHUB_TOKEN` secret is plainly visible
+in the project's own secret list — which reads as a bug in the hub rather than a scope
+mismatch.
+
+**Suggested fix:** any of three, cheapest first. Make the error distinguish "no token found at
+user scope" from "no token configured", and name the scopes searched. Add a retry-clone action
+for a project whose initial clone failed, so a project-scoped secret becomes usable. Or accept
+the token at creation time as a parameter, since that is when it is actually needed.
+
 ## Docs that are wrong
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
@@ -1724,6 +1775,7 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 34 | Make the clone-token error name the scopes searched, and add a retry-clone action | High | Low |
 | 30 | Chat ships enabled with a nil store when the message broker is off; add `message_broker`/`native_chat` to the settings schema | High | Low |
 | 28 | Hide the hub-level Metrics view from non-admins, or render an explicit admin-only state | High | Trivial |
 | 29 | Do not enable the cloud telemetry exporter without a resolvable service account; WARN once and back off | High | Low |

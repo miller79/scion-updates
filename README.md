@@ -57,6 +57,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 |---|---|---|---|
 | 31 | Progeny agents still get no credentials after the #1292 fix — **three** further blockers, incl. `resolveSecrets` returning `count=0` with ancestry present | 🔴 **Security** | Low |
 | 33 | Clone credentials injected via `strings.Replace` — any remote whose URL carries a username (e.g. every Azure DevOps clone URL) gets a corrupted token and a misleading "repo not found" | 🔴 Blocking | Trivial |
+| 34 | A project-scoped `GITHUB_TOKEN` can never authenticate the initial clone — the clone runs during project creation, and there is no retry | 🟠 High | Low |
 | 13 | `--session-secret` in the systemd template leaks the signing secret into `ps` — and now also undermines 11's encryption-at-rest fix, which derives its key from it | 🔴 **Security** | Trivial |
 | 21 | Secret Manager values are rewritten to SQLite in cleartext on every boot; the signing keys bypass 11's encryption entirely | 🔴 **Security** | Low |
 | 20 | `hub_id` derives from the hostname; a hostname change silently re-namespaces every secret | 🔴 **Security** | Low |
@@ -113,7 +114,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 33 items" is easy to write and harder to trust:
+Worth saying, since "we found 34 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms

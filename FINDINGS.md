@@ -1046,6 +1046,26 @@ the wrong half of the error.
 
 GitHub never exposes this because GitHub clone URLs carry no userinfo.
 
+**Correction — this is a latent bug, not the cause of our failure.** We initially reported this
+as the reason our Azure DevOps clone failed. It was not. Scion has two clone paths, and only
+one has the flaw:
+
+| Path | Function | Behaviour |
+|---|---|---|
+| Project shared-workspace | `CloneSharedWorkspace` (`pkg/util/git.go:567`) | `strings.Replace` — **broken** for URLs with userinfo |
+| Per-agent, in container | `buildAuthenticatedURL` (`cmd/sciontool/commands/init.go`) | `url.Parse` + `url.UserPassword` — **correct** |
+
+Our project uses per-agent clone, which already does the right thing:
+
+```go
+parsed.User = url.UserPassword("oauth2", token)
+```
+
+`url.UserPassword` replaces any existing userinfo rather than prepending to it, so the username
+in our URL was dropped cleanly. The issue below stands as a real defect in the shared-workspace
+path — and notably **the correct implementation already exists in the same repository**, so the
+fix is to copy it, not to invent it.
+
 **Suggested fix:** parse the URL and set userinfo, rather than string-replacing the scheme:
 
 ```go
@@ -1081,6 +1101,37 @@ misread it.
 **Suggested fix:** accept a provider-neutral secret name (`GIT_TOKEN`, or per-host
 `GIT_TOKEN_<HOST>`) with `GITHUB_TOKEN` kept as a fallback, and make the error guidance name
 the host it actually failed against.
+
+### What actually broke our clone: a `.git` suffix
+
+The cause, after eliminating the two above, was the `.git` suffix on the clone URL. Azure
+DevOps treats it as part of the repository identifier:
+
+```
+TF401019: The Git repository with name or identifier connections-ai.git does not exist
+```
+
+Removing it — `…/_git/connections-ai` rather than `…/_git/connections-ai.git` — made the clone
+succeed immediately, with everything else unchanged.
+
+That was our own input, so it is not a defect on its own. What makes it worth recording is that
+`ToHTTPSCloneURL` **adds** the suffix unconditionally when normalising a schemeless remote:
+
+```go
+// Ensure .git suffix
+if !strings.HasSuffix(result, ".git") {
+    result += ".git"
+}
+```
+`pkg/util/git.go:530`
+
+That is a GitHub convention. Our project's `git_remote` is stored schemeless
+(`dev.azure.com/jbhunt/…/_git/connections-ai`), so any path that normalises it will append
+`.git` and produce a URL Azure DevOps rejects. We were saved only because the `clone-url` label
+carried an explicit scheme, which `normalizeCloneURLLabel` passes through untouched.
+
+**Suggested fix:** only append `.git` for hosts where it is correct, or drop the behaviour —
+GitHub, GitLab and Bitbucket all serve fine without it, and Azure DevOps does not tolerate it.
 
 ### 34. A project-scoped `GITHUB_TOKEN` can never authenticate the initial clone 🟠
 
@@ -1128,10 +1179,18 @@ error says "no GITHUB_TOKEN secret configured" while a `GITHUB_TOKEN` secret is 
 in the project's own secret list — which reads as a bug in the hub rather than a scope
 mismatch.
 
-**Suggested fix:** any of three, cheapest first. Make the error distinguish "no token found at
-user scope" from "no token configured", and name the scopes searched. Add a retry-clone action
-for a project whose initial clone failed, so a project-scoped secret becomes usable. Or accept
-the token at creation time as a parameter, since that is when it is actually needed.
+**Correction — a supported path does exist, and we missed it.** The create-project request
+accepts a `gitHubToken` field, and the handler writes it as a project-scoped secret
+*before* the clone runs (`handlers_projects_core.go`, with the comment "This must happen before
+cloneSharedWorkspaceProject"). So supplying the token in the creation form does work. What does
+not work is the far more discoverable route: create the project, watch the clone fail, add a
+`GITHUB_TOKEN` secret to the project, and retry. That sequence can never succeed, and it is the
+one an operator naturally takes.
+
+**Suggested fix:** the error is the cheap part — distinguish "no token found at user scope" from
+"no token configured", and name the scopes searched. Adding a retry-clone action for a project
+whose initial clone failed would make the project-scoped secret usable after the fact and close
+the loop entirely.
 
 ## Docs that are wrong
 

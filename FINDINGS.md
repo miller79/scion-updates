@@ -1511,6 +1511,70 @@ ones reaching a blocked registry, and they take unrelated images down with them.
 `step_dockerfile`/`step_parent`), and/or add `--continue-on-error` so one bad image does not
 abort the rest of the group.
 
+### 32. Agents cannot create a chat thread — the chat API is user-identity-only *(feature request)* 🟡
+
+An orchestrator that spawns a team has no way to open a thread for it. We wanted a newly
+created agent to start a thread so its human owner had somewhere to follow along; there is no
+path to it. Verified three ways against `1befe923`:
+
+**1. No agent-facing command.** `sciontool` has no chat or thread subcommand at all. The
+`scion-messaging` platform skill offers `--thread-id`, but the flag only *targets* a thread
+that already exists:
+
+```
+--thread-id <id>   Use this to reply within a specific project thread
+```
+
+and `cmd/message.go:117` requires it to accompany `--channel`. There is no create verb.
+
+**2. Every chat endpoint requires a user identity.** All 26 handler entry points across
+`handlers_chat_v2.go` and `handlers_chat.go` begin the same way:
+
+```go
+user := GetUserIdentityFromContext(r.Context())
+if user == nil {
+    Forbidden(w)
+    return
+}
+```
+
+and that helper is a type assertion:
+
+```go
+if user, ok := identity.(UserIdentity); ok {
+    return user
+}
+return nil
+```
+
+An agent principal is not a `UserIdentity`, so it returns nil and every chat call from an agent
+is a 403. We grepped the chat handlers for any agent-identity path — `GetAgentIdentityFromContext`,
+`AgentTokenClaims`, `agentIdentity` — and there is none.
+
+**3. Agent-sent messages never create thread state.** In the broker inbound path, thread and
+channel affinity are recorded only for user senders:
+
+```go
+if s.webChatStore != nil && req.Message.Channel != "" && strings.HasPrefix(req.Message.Sender, "user:") {
+        … RecordChannel(…)
+        … TouchThread(…)
+```
+`pkg/hub/handlers_broker_inbound.go:266`
+
+So even sending a message with a fresh `--thread-id` does not bring a thread into being. A
+thread can only originate from a human action.
+
+**Why it matters.** The orchestrator pattern the product encourages — one agent spawning a
+team of specialists — has no way to give that team a home in chat. The human has to create the
+thread first and hand the ID down, which inverts the flow and cannot be automated from a
+template.
+
+**Suggested fix:** accept an agent principal on the conversation-creation path, scoped to the
+agent's own project, with the creating agent's owner as the thread's user. Everything else can
+stay user-only. Note `9668909c` (#1331, "conversation model foundation") lands a `Conversation`
+ent model but no agent-facing API — if agent-created conversations are wanted eventually, that
+schema is the natural place to allow an agent principal rather than retrofitting later.
+
 ### 10. Minor items 🟡
 
 - **`scion --version` doesn't exist** — it's `scion version`. The `--version` flag
@@ -1598,6 +1662,7 @@ Ordered by priority, not by issue number.
 | 23 | Accept both `gcp_project_id` and `gcpProjectId`, or warn on wrong casing | Medium | Low |
 | 27 | Let `--target` accept a single image id; add `--continue-on-error` | Medium | Low |
 | 19 | Accept a zip upload for template import (extractor already exists) | Low (feature) | Low |
+| 32 | Let an agent principal create a conversation in its own project | Low (feature) | Medium |
 | 10 | `--version` alias; drop NATS; placeholder registry | Low | Low |
 
 Happy to supply logs, configs, or test any of these against our environment — we have

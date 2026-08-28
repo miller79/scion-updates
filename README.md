@@ -83,6 +83,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 9 | The image build cannot be pointed at an internal package registry — behind one, **no image builds at all**. Patch available | 🟠 High | Low |
 | 27 | Image build can only target groups, so one unbuildable image blocks unrelated ones | 🟡 Medium | Low |
 | 19 | No way to import a template except from a URL or server-side files — no zip upload *(feature request)* | 🟡 Low | Low |
+| 32 | Agents cannot create a chat thread — every chat endpoint is user-identity-only, so an orchestrator can't give its team a home *(feature request)* | 🟡 Low | Medium |
 | 10 | Small stuff: no `--version` alias, NATS still installed, a placeholder registry that looks real | 🟡 Low | Low |
 
 **If you only look at four:**
@@ -111,7 +112,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 31 items" is easy to write and harder to trust:
+Worth saying, since "we found 32 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms

@@ -1012,6 +1012,76 @@ issue 8 on silent key-dropping.
 
 ---
 
+### 33. Clone credentials are injected by string replace, which corrupts any URL that already has a username 🔴
+
+Cloning an Azure DevOps repository fails with:
+
+```
+remote: TF401019: The Git repository with name or identifier connections-ai.git does not
+exist or you do not have permissions for the operation you are attempting.
+fatal: repository 'https://dev.azure.com/jbhunt/…/_git/connections-ai.git/' not found
+```
+
+The repository exists and the token is valid. The credential is being mangled before git ever
+sees it:
+
+```go
+authURL = strings.Replace(cloneURL, "https://", "https://oauth2:"+token+"@", 1)
+```
+`pkg/util/git.go:567`
+
+That assumes the clone URL has no userinfo. Azure DevOps' Clone dialog hands you
+`https://<user>@dev.azure.com/<org>/<project>/_git/<repo>`, so the replace produces:
+
+```
+https://oauth2:<TOKEN>@Anthony.Lofton@dev.azure.com/…
+                      ↑                ↑   two @ signs
+```
+
+Git splits userinfo at the last `@`, so it authenticates as username `oauth2` with password
+`<TOKEN>@Anthony.Lofton`. The PAT is corrupted, auth fails, and ADO answers `TF401019` — a
+message it uses for both "no such repo" and "no permission", so it points the operator at the
+repository name rather than at their credentials. We spent the whole investigation looking at
+the wrong half of the error.
+
+GitHub never exposes this because GitHub clone URLs carry no userinfo.
+
+**Suggested fix:** parse the URL and set userinfo, rather than string-replacing the scheme:
+
+```go
+u, err := url.Parse(cloneURL)
+if err != nil { return err }
+if token != "" {
+    u.User = url.UserPassword("oauth2", token)   // replaces any existing userinfo
+}
+authURL := u.String()
+```
+
+`net/url` already handles this correctly and drops the pre-existing username. The credential
+helper path used by pull (`pkg/util/git.go:656`) is not affected — it passes the token out of
+band, which is the safer pattern and could be used for clone too.
+
+### The wider gap: the git path only knows GitHub
+
+Worth noting alongside the above, since it shapes the whole experience of connecting a
+non-GitHub remote:
+
+- `resolveCloneToken` looks for exactly three things: a GitHub App installation token, a
+  project secret named literally `GITHUB_TOKEN`, then the creating user's `GITHUB_TOKEN`.
+  There is no provider-neutral key and no per-host credential mapping.
+- The failure guidance is hardcoded to `"Check that GITHUB_TOKEN (or GitHub App credentials)
+  are valid…"` regardless of the host being cloned.
+- The injected username is hardcoded to `oauth2`.
+
+Azure DevOps works despite this — it accepts any username with a PAT as the password — but only
+by coincidence. To connect ADO an operator must store an Azure PAT under a secret named
+`GITHUB_TOKEN`, which is misleading enough that anyone auditing the secret list later will
+misread it.
+
+**Suggested fix:** accept a provider-neutral secret name (`GIT_TOKEN`, or per-host
+`GIT_TOKEN_<HOST>`) with `GITHUB_TOKEN` kept as a fallback, and make the error guidance name
+the host it actually failed against.
+
 ## Docs that are wrong
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
@@ -1633,6 +1703,7 @@ Ordered by priority, not by issue number.
 | # | Change | Severity | Effort |
 |---|---|---|---|
 | **13** | **Drop `--session-secret` from the systemd template — it exposes the cookie signing secret via `ps`** | **Security** | **Trivial** |
+| **33** | **Build the authenticated clone URL with `net/url` instead of `strings.Replace` — any remote with a username currently gets corrupted credentials** | **Blocking** | **Trivial** |
 | **31** | **Progeny credential inheritance is unreachable for agent-captured secrets: `created_by` carries an `agent:` prefix the ancestry match does not strip** | **Blocking** | Low |
 | **11** | **Local backend stores plaintext while its comment claims writes are rejected** | **Security** | Low–Med |
 | **16** | **All authenticated users can read all projects by default; `visibility` is inert** | **Security** | Low |

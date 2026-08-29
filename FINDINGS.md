@@ -1811,6 +1811,41 @@ stay user-only. Note `9668909c` (#1331, "conversation model foundation") lands a
 ent model but no agent-facing API — if agent-created conversations are wanted eventually, that
 schema is the natural place to allow an agent principal rather than retrofitting later.
 
+### 36. The terminal link in the chat members sidebar forces a new browser tab *(UX)* 🟡
+
+Clicking the terminal icon next to an agent in the chat members sidebar opens a new browser tab
+rather than navigating within the app. Nothing signals that it will, and for the normal case —
+glance at what an agent is doing, come back to the conversation — a tab is the wrong unit. Ten
+agents inspected is ten tabs to close.
+
+Both agent links are hardcoded:
+
+```ts
+<a href="/agents/${a.id}/terminal" target="_blank" class="agent-terminal" title="Open terminal">
+  <sl-icon name="terminal"></sl-icon>
+</a>
+<a href="/agents/${a.id}" target="_blank" class="agent-popout" title="Open agent detail">
+  <sl-icon name="box-arrow-up-right"></sl-icon>
+</a>
+```
+`web/src/components/shared/chat/chat-members.ts:511-527`
+
+What makes this a defect rather than a preference is the pairing. The **second** link is
+explicitly a pop-out: it is classed `agent-popout` and drawn with the `box-arrow-up-right`
+icon, so a new tab is exactly what a user expects. The **first** is drawn with a plain terminal
+glyph and titled "Open terminal", carries no pop-out affordance, and behaves identically. Two
+adjacent controls, visually distinguished, functionally the same — so the distinction the icons
+promise is not real.
+
+Worth noting the rest of the chat UI navigates in place; these are the only two `target="_blank"`
+in the chat components, so this is a local inconsistency rather than a house style.
+
+**Suggested fix:** drop `target="_blank"` from the terminal link and let it route in-app, keeping
+the pop-out link as the deliberate new-tab affordance — that makes the two icons mean two
+different things. If a new tab is wanted for both, give the terminal link a pop-out indicator so
+the behaviour is predictable before the click. Users who want a tab can still ctrl/cmd-click,
+which works on a normal in-app link and does not today.
+
 ### 10. Minor items 🟡
 
 - **`scion --version` doesn't exist** — it's `scion version`. The `--version` flag
@@ -1901,6 +1936,7 @@ Ordered by priority, not by issue number.
 | 23 | Accept both `gcp_project_id` and `gcpProjectId`, or warn on wrong casing | Medium | Low |
 | 27 | Let `--target` accept a single image id; add `--continue-on-error` | Medium | Low |
 | 19 | Accept a zip upload for template import (extractor already exists) | Low (feature) | Low |
+| 36 | Drop `target="_blank"` from the chat sidebar terminal link so it navigates in-app | Low (UX) | Trivial |
 | 32 | Let an agent principal create a conversation in its own project | Low (feature) | Medium |
 | 10 | `--version` alias; drop NATS; placeholder registry | Low | Low |
 

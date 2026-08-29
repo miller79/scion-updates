@@ -87,6 +87,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 27 | Image build can only target groups, so one unbuildable image blocks unrelated ones | 🟡 Medium | Low |
 | 19 | No way to import a template except from a URL or server-side files — no zip upload *(feature request)* | 🟡 Low | Low |
 | 32 | Agents cannot create a chat thread — every chat endpoint is user-identity-only, so an orchestrator can't give its team a home *(feature request)* | 🟡 Low | Medium |
+| 36 | Terminal link in the chat members sidebar forces a new browser tab, while the adjacent pop-out link looks different but behaves the same | 🟡 Low | Trivial |
 | 10 | Small stuff: no `--version` alias, NATS still installed, a placeholder registry that looks real | 🟡 Low | Low |
 
 **If you only look at four:**
@@ -115,7 +116,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 35 items" is easy to write and harder to trust:
+Worth saying, since "we found 36 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms

@@ -1299,6 +1299,41 @@ into `/workspace` *inside the container*, so the host-side directory is not a gi
 Only the shared-workspace mode, where the host directory really is a clone, satisfies the
 condition — which is consistent with the skill's own content assuming a worktree/sandbox layout.
 
+### Confirmed on a live hub
+
+Every running agent, with the skill directory checked directly in each container:
+
+```
+AGENT                                    MODE          GIT   HOST_UID  git-sandbox
+connections-ai-ado--final-fixes-impl…    shared-plain  true  set       (absent)
+connections-ai-ado--fix-template-orch…   shared-plain  true  set       (absent)
+carrier-onboarding--…-orchestrator       shared-plain  —     set       (absent)
+anthony-s-main-project--default-orch…    shared-plain  —     set       (absent)
+```
+
+and the hub log, at debug level:
+
+```
+provision: skipping platform skill "git-sandbox" (inject_when="git_workspace" not satisfied)
+```
+
+The two Azure DevOps agents report `SCION_WORKSPACE_GIT=true` and a git-backed workspace, and
+still do not receive the skill. **The signal that would answer the question correctly is present
+in the very same environment** — the broker emits `SCION_WORKSPACE_GIT`, the provisioner ignores
+it and consults a boolean that was deliberately zeroed for an unrelated reason. `SCION_HOST_UID`
+is set in every container, so the override fires universally.
+
+Note also that `shared-plain` is reported for *every* agent, including projects with no git
+remote at all, so workspace mode does not distinguish these cases either — only
+`SCION_WORKSPACE_GIT` does.
+
+> **Not a bug, so nobody else chases it:** the same log shows
+> `optional skill "scion-platform://git-sandbox" skipped: no resolver registered for scheme
+> "scion-platform"`. That is intended. Those URIs are seeded into `hub_settings` for display
+> only and marked optional; `platform_skills_seed.go:33-37` says so outright. Real injection
+> happens through `injectPlatformSkills()`. We flag it because it reads exactly like the cause
+> and is not.
+
 ### Its content asserts an air-gap that does not exist
 
 ```

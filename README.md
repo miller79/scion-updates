@@ -30,6 +30,7 @@ attribution needed, no need to ask.
 | [**FINDINGS.md**](FINDINGS.md) | The canonical numbered list. This is the one to act on — findings cross-reference each other, so they live in one place and get corrected in place. |
 | [**updates/**](updates/) | A dated entry per working day: what we did, what we found, what we got wrong. |
 | [**role-model-proposal/**](role-model-proposal/) | A target-state proposal for roles and permissions — not a description of current behaviour. |
+| [**docker-support-proposal/**](docker-support-proposal/) | How agents could run containers (Testcontainers, buildpacks) without granting host root. |
 
 Latest: [**2026-08-25**](updates/2026-08-25.md) — rebuilding every container image behind a
 corporate proxy, and half an hour spent believing a 404 was a policy decision.

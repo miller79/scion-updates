@@ -1248,6 +1248,94 @@ Worth noting the same class of staleness appears elsewhere: issue 26 (a deleted 
 returns on restart because its on-disk directory is re-imported). Deletion consistently removes
 the database row while leaving the filesystem artefact that will resurrect or misdirect it.
 
+### 37. The `git-sandbox` platform skill can never reach a clone-per-agent workspace, and its content is wrong for one that has network access 🟠
+
+Two problems that compound: the skill is not injected where it should be, and where it *is*
+injected its instructions may be false.
+
+### It cannot be injected during in-container provisioning
+
+The skill declares a condition:
+
+```yaml
+name: git-sandbox
+inject_when: git_workspace
+```
+
+which resolves to a single boolean:
+
+```go
+case "git_workspace":
+    return injCtx.IsGit
+```
+`pkg/agent/provision.go:1448`
+
+and that boolean is deliberately forced false whenever provisioning runs inside an agent
+container:
+
+```go
+isGit := util.IsGitRepoDir(projectDir)
+if isGit && os.Getenv("SCION_HOST_UID") != "" {
+    // Inside an agent container: treat as non-git to prevent worktree
+    // creation. Container worktrees produce path-identity mismatches
+    // because --relative-paths are computed against the container mount
+    // layout, not the host filesystem.
+    isGit = false
+}
+```
+`pkg/agent/provision.go:485-492`
+
+The override is reasonable on its own terms — it exists to stop worktree creation in a
+container, and the comment explains why. The defect is that **one boolean is serving two
+unrelated questions**: "may I create a worktree here?" and "is this a git workspace?" Those are
+not the same claim, and collapsing them means a `git_workspace` skill can never be injected
+during in-container provisioning, whatever the project's actual git configuration.
+
+There is a second path to the same outcome. `IsGit` is computed from `IsGitRepoDir(projectDir)`
+— the **host-side** project directory. In a clone-per-agent project the repository is cloned
+into `/workspace` *inside the container*, so the host-side directory is not a git repo and
+`IsGit` is false there too. Either way, clone-per-agent git projects never receive the skill.
+
+Only the shared-workspace mode, where the host directory really is a clone, satisfies the
+condition — which is consistent with the skill's own content assuming a worktree/sandbox layout.
+
+### Its content asserts an air-gap that does not exist
+
+```
+## 1. Local-Only Operations (No Network Access)
+- **Restriction:** The environment is air-gapped from `origin`. Commands like
+  `git fetch`, `git pull`, or `git push` will fail.
+- **Directive:** Always assume the local `main` branch is the source of truth.
+```
+
+Our agents clone over the network from an Azure DevOps remote at startup, so they demonstrably
+have git network access. An agent given this skill is instructed not to attempt operations it
+can perform — the failure mode is a capable agent declining to push or fetch and reporting the
+environment as restricted.
+
+The maintainers appear to know: `.design/workspace-mode-env.md` records that the skill
+"assumes" a particular workspace mode and lists *"consolidating or rewriting the `git-sandbox`
+platform skill"* as a follow-on.
+
+**Suggested fix:** separate the two meanings — keep the container override for worktree
+creation, and give the injection context its own signal for "this workspace is git-backed"
+(the broker already emits `SCION_WORKSPACE_MODE` and `SCION_WORKSPACE_GIT`, so the information
+exists). Then make the skill's content conditional on mode, or split it: the air-gap and
+worktree guidance belongs to worktree-per-agent, while a clone-per-agent agent needs ordinary
+remote-capable git instructions.
+
+**A note on how this was found, because the failure is silent.** The skip is logged only at
+debug level:
+
+```go
+util.Debugf("provision: skipping platform skill %q (inject_when=%q not satisfied)", ...)
+```
+
+so an operator sees a skill listed in the hub's injected-skills settings, no error anywhere, and
+no such directory in the agent. Two separate investigations on our side concluded the skill did
+not exist at all before we checked the binary. A single INFO line naming the skill and the
+unsatisfied condition would have ended it immediately.
+
 ## Docs that are wrong
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
@@ -1926,6 +2014,7 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 37 | Give `inject_when: git_workspace` its own signal instead of the worktree-suppression boolean; make the skill's air-gap content mode-conditional | High | Medium |
 | 34 | Make the clone-token error name the scopes searched, and add a retry-clone action | High | Low |
 | 30 | Chat ships enabled with a nil store when the message broker is off; add `message_broker`/`native_chat` to the settings schema | High | Low |
 | 28 | Hide the hub-level Metrics view from non-admins, or render an explicit admin-only state | High | Trivial |

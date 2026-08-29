@@ -943,6 +943,87 @@ both conditions. Project-scoping the credential also works and sidesteps progeny
 since `hasAnyKey` checks `project` scope directly — at the cost of sharing it with everyone in
 the project.
 
+### 40. File secrets are delivered twice — as a `0600` file *and* as an environment variable containing the same bytes 🔴
+
+Scion writes file secrets to disk with tight permissions:
+
+```
+-rw------- 1 scion scion  /home/scion/.scion/harness/secrets/GITHUB_TOKEN
+-rw------- 1 scion scion  /home/scion/.m2/settings.xml
+```
+
+and then puts the **same content** into a container environment variable:
+
+```
+$ printenv SCION_STAGED_SECRETS | base64 -d
+file_secrets:
+  name=COPILOT_CONFIG  target=/home/scion/.copilot/config.json   value=864 chars base64
+  name=MAVEN_SETTINGS  target=/home/scion/.m2/settings.xml       value=2492 chars base64
+```
+
+`PD94bWwgdmVy` decodes to `<?xml ver` — the whole `settings.xml`, including the plaintext
+Artifactory password inside it. The 864-char value matches the 648-byte `config.json`.
+
+**The file mode is therefore decorative.** Environment variables are inherited by every child
+process, so anything the agent runs sees every staged secret:
+
+- a build script in the cloned repository
+- an npm `postinstall`, a Maven plugin, a Gradle task
+- any test the agent is asked to run
+- any subprocess of the harness
+
+The threat model this breaks is the one that matters for an agent platform: the agent executes
+code it did not write, from a repository the user asked it to work on. Careful `0600` files
+defend against that; an environment variable does not. One `printenv` exfiltrates the lot.
+
+It also spreads: environment variables surface in process listings for the same user, in crash
+dumps, in `docker inspect` output, and in any log line that dumps the environment.
+
+**Suggested fix:** deliver file secrets by file only. The staging manifest needs the *name* and
+*target path* so the harness knows what landed where — it does not need the contents, which are
+already on disk at the path the manifest names. If some consumer genuinely needs the value
+in-process, pass a path and let it read the file, so the `0600` still means something.
+
+### 41. Anything an agent prints is persisted durably, secrets included 🟠
+
+During a build our agent echoed an Artifactory token into a status message. It was redacted in
+the UI within seconds. The value is still in the database:
+
+```
+messages table: 1592 rows
+  'ARTIFACTORY_TOKEN'  41 messages      project: Connections AI (ADO)
+  'AP53Yox…'            1 message       (the Artifactory password)
+  '_authToken'          1 message
+```
+
+and in the system journal:
+
+```
+journalctl -u scion-hub | grep -c 'AP53Yox'   -> 2
+journalctl -u scion-hub | grep -c '_authToken' -> 2
+```
+
+Agent status messages are stored permanently in `messages`, published to the project's chat, and
+written to the host journal. There is no redaction on the ingest path and no way to retract a
+message once sent — deleting it from the UI does not remove it from the journal, and the journal
+is readable by anyone with host access, which on this deployment is a wider set than the project's
+members.
+
+This is not the agent misbehaving in an exotic way. Agents narrate what they are doing, and what
+they are doing involves credentials; the platform stores that narration verbatim, forever, in
+two places.
+
+**Suggested fix:** run inbound agent messages through the same redaction the telemetry pipeline
+already has — `settings.yaml` already declares `redact: [prompt, user.email, tool_output,
+tool_input]` for telemetry, so the machinery exists and simply is not applied here. Pattern-match
+known credential shapes (`reftkn:`, `ghp_`, `_authToken=`, base64 JWTs) at ingest and store a
+marker instead. Also worth offering an operator command to purge a message from the store and
+journal, since "rotate the credential" is currently the only remedy.
+
+**Credit where due:** the telemetry pipeline *is* configured correctly — `redact` covers prompts,
+user email, tool input and output, `session_id` is hashed, and `agent.user.prompt` is excluded
+from export entirely. Telemetry is not the leak path here. The message store is.
+
 ## Things that block a deployment
 
 ### 1. Hardcoded Go version no longer satisfies `go.mod` 🟠
@@ -2123,6 +2204,8 @@ Ordered by priority, not by issue number.
 | # | Change | Severity | Effort |
 |---|---|---|---|
 | **13** | **Drop `--session-secret` from the systemd template — it exposes the cookie signing secret via `ps`** | **Security** | **Trivial** |
+| **40** | **Stop duplicating file-secret contents into `SCION_STAGED_SECRETS` — the env var defeats the `0600` file it accompanies** | **Security** | Low |
+| **41** | **Redact credentials from agent messages at ingest; they persist in the message store and journal permanently** | **Security** | Low |
 | **35** | **Rewrite the project marker on creation — a recreated project inherits the deleted one's id and all agent creation fails** | **Blocking** | **Trivial** |
 | **33** | **Build the authenticated clone URL with `net/url` instead of `strings.Replace` — any remote with a username currently gets corrupted credentials** | **Blocking** | **Trivial** |
 | **31** | **Progeny credential inheritance is unreachable for agent-captured secrets: `created_by` carries an `agent:` prefix the ancestry match does not strip** | **Blocking** | Low |

@@ -60,6 +60,8 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 35 | Delete a git project and recreate it with the same name, and every agent creation fails — the on-disk marker still points at the deleted project | 🔴 Blocking | Trivial |
 | 33 | Clone credentials injected via `strings.Replace` — any remote whose URL carries a username (e.g. every Azure DevOps clone URL) gets a corrupted token and a misleading "repo not found" | 🔴 Blocking | Trivial |
 | 34 | A project-scoped `GITHUB_TOKEN` can never authenticate the initial clone — the clone runs during project creation, and there is no retry | 🟠 High | Low |
+| 38 | Profile-level `env` is in the schema and silently ignored, while `volumes` in the same block works | 🟠 High | Trivial |
+| 39 | Agents are sibling containers to the Docker daemon — host-path bind mounts silently mount an **empty directory** instead of failing | 🟠 High | Low |
 | 37 | `git-sandbox` skill never injected into clone-per-agent workspaces — its condition reuses a boolean that means "don't make worktrees here" — and its content claims an air-gap that does not exist | 🟠 High | Medium |
 | 13 | `--session-secret` in the systemd template leaks the signing secret into `ps` — and now also undermines 11's encryption-at-rest fix, which derives its key from it | 🔴 **Security** | Trivial |
 | 21 | Secret Manager values are rewritten to SQLite in cleartext on every boot; the signing keys bypass 11's encryption entirely | 🔴 **Security** | Low |
@@ -118,7 +120,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 37 items" is easy to write and harder to trust:
+Worth saying, since "we found 39 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms

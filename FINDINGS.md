@@ -1371,6 +1371,102 @@ no such directory in the agent. Two separate investigations on our side conclude
 not exist at all before we checked the binary. A single INFO line naming the skill and the
 unsatisfied condition would have ended it immediately.
 
+### 38. Profile-level `env` is accepted by the schema and silently ignored 🟠
+
+We set two things in the same `profiles.local` block. One took effect, the other vanished:
+
+```yaml
+profiles:
+    local:
+        volumes:
+            - source: /opt/scion-docker-cli/docker
+              target: /usr/local/bin/docker      # ← arrived in the container
+        env:
+            DOCKER_HOST: unix:///run/...          # ← never arrived
+```
+
+Verified inside a running agent: the mounted binary was present at
+`/usr/local/bin/docker`; `printenv DOCKER_HOST` returned nothing.
+
+The resolver merges one and not the other:
+
+```go
+// Merge profile-level volumes
+if profile.Volumes != nil {
+    result.Volumes = append(result.Volumes, profile.Volumes...)
+}
+```
+
+There is no `profile.Env` merge anywhere in that function. The asymmetry is stark because the
+*override* level immediately below merges both:
+
+```go
+if override.Env != nil {
+    result.Env = mergeMaps(result.Env, override.Env)
+}
+if override.Volumes != nil {
+    result.Volumes = append(result.Volumes, override.Volumes...)
+}
+```
+`pkg/config/settings.go:214-236`
+
+A nearby comment refers to "G3-full" reducing the number of env injection points, so dropping
+profile-level env may well be deliberate. **If so, the schema was not updated to match.**
+`profileConfig` still advertises `env` alongside `volumes`, `resources`, `secrets` and the rest,
+so an operator writes it, the file validates, the hub starts clean, and nothing happens.
+
+That is the whole cost: not that the feature is missing, but that the config surface promises it.
+We spent a debugging cycle assuming a socket permission problem because the environment variable
+we had set was absent, and nothing anywhere said it never could be.
+
+**Suggested fix:** whichever is intended — merge `profile.Env` like `override.Env`, or remove
+`env` from the `profileConfig` schema and reject it at load with a message naming
+`harness_overrides.<harness>.env` as the supported place. Either is fine; the current state is
+the one that costs people time.
+
+### 39. Agents that use Docker are sibling containers, and nothing tells them so 🟠
+
+An agent doing container work talks to a daemon whose filesystem is **not** the agent's
+filesystem. Every path in a `docker run` argument is resolved by the daemon, on the host. Two
+failures follow from this, and our agent hit both.
+
+**The loud one — socket path.** `pack build --docker-host=inherit` asks the daemon to mount
+`$DOCKER_HOST` into its lifecycle containers. Inside the agent the socket sits at
+`/var/run/docker.sock`; on the host that path is a *different* daemon's socket, so:
+
+```
+mount /var/run/docker.sock          -> permission denied
+mount /run/user/1002/docker.sock    -> server=29.7.2      (same daemon, real host path)
+```
+
+No `pack` flag can bridge that, which is why every attempt failed identically. The fix is
+path identity: mount the socket at the same path inside the agent as on the host.
+
+**The quiet one, and much worse — bind mounts silently succeed empty.** The agent mounted a
+directory containing a Maven `settings.xml` into a buildpack binding. The daemon resolved that
+host path, found nothing there, and — as Docker does — **created an empty directory and mounted
+it**. No error. The buildpack saw an empty binding, ignored the mirror configuration, went
+straight to Maven Central, and failed on egress.
+
+The agent then spent hours verifying the `settings.xml` was byte-for-byte correct. It was. It
+was never being read. A wrong-but-loud failure would have cost minutes.
+
+The eventual fix was to stop using host paths entirely and pass the binding through a **named
+volume**, populated via `docker cp`, since named volumes are resolved by the daemon in its own
+namespace and cannot silently miss.
+
+**Why this belongs to Scion rather than to Docker.** The sibling-container topology is Scion's
+architectural choice, and it is invisible from inside an agent — nothing in the environment, the
+platform skills, or the docs says "the daemon you are talking to does not share your
+filesystem." An LLM agent will reason from the container's own view, conclude its file is
+correct, and keep going. Both of ours did.
+
+**Suggested fix:** a platform skill, or a section in the existing `git-sandbox`/`scion-cli-operations`
+skills, stating the topology and the two consequences: mount socket paths by their *host* path,
+and pass file bindings by named volume rather than host path. Setting an explicit marker in the
+agent environment (e.g. `SCION_DOCKER_TOPOLOGY=sibling`) would let a skill trigger on it. This is
+cheap and would have saved us most of a day.
+
 ## Docs that are wrong
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
@@ -2049,6 +2145,8 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 38 | Merge `profile.Env` like `override.Env`, or drop `env` from the profileConfig schema and reject it | High | Trivial |
+| 39 | Tell agents they are sibling containers: host-path bind mounts silently mount empty dirs | High | Low |
 | 37 | Give `inject_when: git_workspace` its own signal instead of the worktree-suppression boolean; make the skill's air-gap content mode-conditional | High | Medium |
 | 34 | Make the clone-token error name the scopes searched, and add a retry-clone action | High | Low |
 | 30 | Chat ships enabled with a nil store when the message broker is off; add `message_broker`/`native_chat` to the settings schema | High | Low |

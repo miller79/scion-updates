@@ -132,6 +132,97 @@ outside its own workspace, that should be visible on the agent — in the UI and
 `scion agent status` — rather than only discoverable by reading a harness config. Operators
 should be able to answer "which agents can touch the host?" without grepping YAML.
 
+## A working reference implementation
+
+We built option 2 on our own hub and it works today, with **no changes to Scion**. Recording it
+here because it demonstrates the config surface is already sufficient for a safe answer — what
+is missing is that nothing points an operator at it.
+
+### What we did
+
+A rootless Docker daemon under a dedicated unprivileged user on the same host as the hub:
+
+```
+useradd builder                       # uid 1002, its own /etc/subuid range
+loginctl enable-linger builder
+dockerd-rootless-setuptool.sh install # as builder
+```
+
+Then wired it to agents purely through existing `profileConfig` fields:
+
+```yaml
+profiles:
+    local:
+        volumes:
+            - source: /run/user/1002
+              target: /run/docker-rootless
+            - source: /opt/scion-docker-cli/docker
+              target: /usr/local/bin/docker
+              read_only: true
+        env:
+            DOCKER_HOST: unix:///run/docker-rootless/docker.sock
+            TESTCONTAINERS_RYUK_DISABLED: "true"
+```
+
+The second volume mounts a static `docker` CLI binary into every agent, because no Scion image
+ships one. That avoids rebuilding images to add a single file.
+
+### The isolation, measured
+
+The claim worth testing is not "it runs" but "an agent cannot reach the host." We ran a
+container under the rootless daemon that bind-mounts **the entire host filesystem** and runs as
+root inside its namespace:
+
+| Attempt | Result |
+|---|---|
+| read `hub.db` | denied |
+| read `hub.env` | denied |
+| list `/home/scion` | denied |
+| reach the root `docker.sock` | denied |
+
+Throughout: hub `active`, `/healthz` 200, agents running, disk unchanged. The container's `root`
+is `builder` in a user namespace, and the hub's files are `600 scion:scion`, so the boundary is
+enforced by the kernel rather than by convention.
+
+For comparison, the same test against the **root** daemon's socket would have returned the
+contents of every one of those files.
+
+### What this validates, and what it does not
+
+**Validates:** the `volumes` + `env` surface is enough to attach agents to an external daemon
+safely. Option 2 needs no new mechanism — only documentation, and ideally a named config block
+so operators do not have to derive this.
+
+**Does not validate option 1.** This is still an *external* daemon. Agents cannot run a daemon
+inside their own container, which is what `--runtime` passthrough would enable, and which is the
+only arrangement where an agent is genuinely self-contained.
+
+### Honest limitations
+
+- **Same kernel.** A container-escape vulnerability still lands on the hub host. A separate
+  build VM contains that; this does not. Lower risk than the root socket by a wide margin,
+  higher than a separate machine.
+- **Ryuk disabled.** Testcontainers' reaper is unreliable rootless, so test containers are not
+  auto-removed. We run an hourly prune with a disk-pressure escalation that reaps
+  `org.testcontainers` containers older than four hours.
+- **Disk is the live risk.** The rootless daemon's images live under `/home/builder`, on the
+  same filesystem as `hub.db`. If it fills, the hub stops writing. The prune timer exists
+  specifically for this.
+- **Profile scope is hub-wide.** Attaching at the profile level gives *every* agent the socket.
+  Per-project or per-harness-config attachment would be better; the fields exist at
+  `harnessConfig` level too, but selecting per project requires a project-scoped harness config.
+
+### What upstream could take from this
+
+1. Document this arrangement. It is the safe answer available today and nothing points to it.
+2. Add a named `build_backend` block so it is declarative rather than three fields an operator
+   has to assemble correctly.
+3. Ship a `docker` CLI in the base image, or make it an opt-in build arg. Mounting a binary
+   works but is a workaround for a missing 40 MB.
+4. The `VolumeMount` denylist above matters more once this pattern is documented — the same
+   field that attaches a *rootless* socket safely attaches the *root* one catastrophically, and
+   nothing distinguishes them.
+
 ## What we are not asking for
 
 - Not asking for the socket mount to be supported. The opposite.
@@ -148,6 +239,7 @@ should be able to answer "which agents can touch the host?" without grepping YAM
 | Managed DinD companion | Large | Yes | None *if* on (1); host root without it |
 | Socket mount *(status quo workaround)* | None | Yes | **Host root** |
 | Delegate to CI / Cloud Build | None | **No** | None |
+| *Rootless daemon on the hub host (built, see above)* | *None — config only* | *Yes* | *None — user-namespaced; same kernel* |
 
 The last row is why this proposal exists: it is the only option available today that keeps the
 host safe, and it is the one that does not work for the use case.

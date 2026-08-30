@@ -1548,6 +1548,68 @@ and pass file bindings by named volume rather than host path. Setting an explici
 agent environment (e.g. `SCION_DOCKER_TOPOLOGY=sibling`) would let a skill trigger on it. This is
 cheap and would have saved us most of a day.
 
+### 42. A message containing `<template>` silently loses everything after it 🟠
+
+An agent posted a status update ending:
+
+> Any future `scion start ... -t <template>` will now pick up the correct content. Sync agent
+> torn down; only I'm running. Thanks for asking — that would've been a silent gap otherwise.
+
+The UI rendered it up to `-t ` and stopped. No ellipsis, no "show more", no error. **Copying
+the message yields the full text**, so the content is intact in the store and only the rendering
+is lost.
+
+### Why
+
+Chat markdown is rendered with HTML passthrough enabled, then sanitised:
+
+```ts
+const rawHtml = marked.parse(markdown, { async: false }) as string;
+return purify.sanitize(rawHtml);
+```
+`web/src/utils/markdown.ts:57-58`
+
+`marked` is not told to escape raw HTML, so `<template>` in prose is emitted as an actual tag.
+The browser's parser then does what the spec requires: **everything following `<template>` becomes
+its inert `.content` DocumentFragment**, not its child nodes. DOMPurify walks child nodes, does
+not find that text, removes the disallowed `<template>` element, and the fragment goes with it.
+
+This is specific to elements with special parsing. For an ordinary unknown tag — `<foo>` —
+DOMPurify's default `KEEP_CONTENT: true` strips the tag and keeps the text, so nothing is lost.
+`<template>` is the pathological case; `<style>`, `<textarea>` and `<title>` consume following
+content as raw text in similar ways and are worth checking too.
+
+### Why it will keep happening
+
+Angle-bracket placeholders are ubiquitous in exactly the text agents produce:
+
+```
+scion start <name> -t <template>
+export GITHUB_TOKEN=<your-token>
+--project <project-id>
+```
+
+`<template>` is not an exotic string here — it is the literal placeholder in Scion's own CLI
+help for the `-t` flag. Any agent explaining that command truncates its own message from that
+point on, and neither the agent nor the reader is told.
+
+**This is not an XSS finding.** DOMPurify is present, correctly configured, and doing its job —
+the hook that forces `target="_blank" rel="noopener noreferrer"` on anchors is a nice touch. The
+defect is that HTML passthrough is enabled at all for user- and agent-authored prose, where it
+buys nothing and costs message content.
+
+**Suggested fix:** escape HTML in the source before parsing, or override marked's `html`
+renderer to emit escaped text:
+
+```ts
+marked.use({ renderer: { html: (t: string) => escapeHtml(t) } });
+```
+
+Fenced code and inline backticks are unaffected — those are handled by the markdown grammar, not
+HTML passthrough — so nothing legitimate is lost. If raw HTML in chat is deliberately supported,
+then `template` needs adding to DOMPurify's `ALLOWED_TAGS` *and* the content fragment reattached,
+which is considerably more work for no obvious benefit.
+
 ## Docs that are wrong
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
@@ -2228,6 +2290,7 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 42 | Escape HTML in chat markdown instead of passing it through — `<template>` in prose silently truncates the message | High | Trivial |
 | 38 | Merge `profile.Env` like `override.Env`, or drop `env` from the profileConfig schema and reject it | High | Trivial |
 | 39 | Tell agents they are sibling containers: host-path bind mounts silently mount empty dirs | High | Low |
 | 37 | Give `inject_when: git_workspace` its own signal instead of the worktree-suppression boolean; make the skill's air-gap content mode-conditional | High | Medium |

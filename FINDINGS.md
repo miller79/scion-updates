@@ -3,7 +3,7 @@
 *Anthony Lofton — August 2026*
 
 We stood up a Scion Hub on an internal-only GCE VM (Ubuntu 24.04) with Keycloak SSO and TLS
-handled by an F5 BIG-IP. Running `main` @ `89ed0fe8`.
+handled by an F5 BIG-IP. Running `main` @ `aedf89ed`.
 
 **It works.** But we hit enough snags getting there that it seemed worth writing down —
 partly so the next person in a similar environment has an easier time, and partly because a
@@ -11,30 +11,31 @@ few of these look like real bugs rather than just "our setup is unusual".
 
 > **A note on freshness:** we deployed at `90bf246e`, then pulled 24 commits (through PR
 > #1201), then a further 16 (through PR #1217) — rebuilding and re-checking every item each
-> time. **All 19 issues below are still present in `1933d359`.** We later pulled through
-> `89ed0fe8` and added issues 20-25, then through `2b8be982` and added issues 26-27.
-> Issues 20-23 surfaced while moving the hub onto GCP Secret Manager and GCS object storage;
-> 24 and 25 surfaced when agent creation broke for three days and the hub reported nothing
-> wrong throughout; 9 was substantially rewritten and 26-27 added while rebuilding all
-> container images from source behind a corporate proxy.
+> time. **All 19 issues then filed were still present at `1933d359`.** We later pulled through
+> `89ed0fe8` and added issues 20-25, then `2b8be982` and added 26-27, then `aedf89ed` and added
+> 28-43. Issues 20-23 surfaced while moving the hub onto GCP Secret Manager and GCS object
+> storage; 24 and 25 surfaced when agent creation broke for three days and the hub reported
+> nothing wrong throughout; 9 was substantially rewritten and 26-27 added while rebuilding all
+> container images from source behind a corporate proxy; 31 and 37-41 came out of running
+> orchestrator/progeny agents and giving them Docker; 42-43 out of ordinary daily use.
 >
-> **Re-verified at `aedf89ed` (2026-08-25), 23 commits on from `2b8be982`: every open issue
-> above is still open.** That upgrade added the GKE Helm chart work, a `grok-build` harness,
-> and a `DefaultHarnessAuth` setting; none of it touches the areas these issues live in. The
-> checks were made against the files each issue cites, not from memory — for example issue 1's
-> two scripts still pin `go1.23.0`, and issue 21's `backupSigningKeyToStore` still assigns
-> `EncryptedValue = encodedValue` directly.
+> **Currently deployed and re-verified at `aedf89ed`.** Three issues have been fixed upstream
+> since we started — 11, 16 (partially) and 3 — and each is marked as such at its own heading
+> and struck through in the priority table. Everything else here is open. The checks are made
+> against the files each issue cites, not from memory: issue 1's two scripts still pin
+> `go1.23.0`, and issue 21's `backupSigningKeyToStore` still assigns `EncryptedValue =
+> encodedValue` directly.
 >
-> One thing worth flagging from the latest round: **PR #1205 ("add shellcheck gate and fix
+> `1befe923` is available upstream but not yet deployed here at the maintainer's suggestion, so
+> nothing in this report has been checked against it.
+>
+> One thing worth flagging from an earlier round: **PR #1205 ("add shellcheck gate and fix
 > existing findings") edited eight files under `scripts/starter-hub/`**, including the two
 > scripts most of this report concerns. Those edits were pure lint hygiene — `# shellcheck`
 > directives, `read -r`, quoting `--labels` and `--create-disk`. The `git push origin main`,
 > the stale Go pin, and the `--session-secret` on the systemd `ExecStart` line all came
 > through untouched, which is entirely expected since shellcheck has no opinion on any of
 > them. Noted just to make clear these aren't things a linter will surface.
->
-> `pkg/secret/` has been untouched across all 40 commits, so issue 11 is exactly as
-> described.
 
 ---
 
@@ -50,15 +51,29 @@ steps didn't apply**. We ended up doing the relevant parts by hand, which is how
 this came to light.
 
 Issues are numbered in the order we found them — the table at the end is sorted by priority
-instead. Numbers 11–19 came later, while we were hardening things for a wider test group and
-trying to get telemetry working. Numbers 20–25 came later still, when we moved secrets
-into GCP Secret Manager and storage into a GCS bucket — that migration is where the two
-most serious items in this report turned up.
+instead. Numbers 11–19 came while we were hardening things for a wider test group and trying to
+get telemetry working. Numbers 20–25 came when we moved secrets into GCP Secret Manager and
+storage into a GCS bucket. Numbers 26 onward came from ordinary daily use by a real team:
+running orchestrators with progeny agents, cloning from Azure DevOps, and giving agents the
+ability to run containers.
 
-**If you only look at a few:** **13**, **11**, **20** and **21** are the security ones.
-**13 is a one-line fix.** **20** can orphan every secret you have stored, without an
-error. **21** is the reason **11**'s natural remedy — "switch to Secret Manager" — only
-half-works. **2** is the one that stops a stock deployment dead at step 1.
+**If you only look at four:**
+
+**31** first, because it is live work — the `hasAnyKey` fix in #1292 is correct and deployed
+here, and progeny agents still get no credentials. Three conditions sit behind it, one of them
+a one-line prefix mismatch. Worth seeing before #1252 is closed.
+
+**16 and 18** together are what most enterprises will care about: every authenticated user can
+read every project out of the box, and the obvious fix hides projects from their own members.
+
+**13** is a one-line fix that now also protects the new encryption at rest — since 11's fix
+derives its key from the very secret 13 leaks into `ps`.
+
+**30** is the cheapest win: chat ships enabled with a nil store whenever the message broker is
+off, so it renders fully and 503s on every send — and the key that fixes it is absent from the
+settings schema.
+
+**2** is still the one that stops a stock deployment dead at step 1.
 
 ---
 
@@ -405,6 +420,12 @@ want to remove.
 
 
 ---
+
+> **Issues 16, 17 and 18 are symptoms of the same gap: there is no coherent role model to
+> anchor them to.** Rather than only report them, we wrote up a target state —
+> [`role-model-proposal/`](role-model-proposal/role-model-proposal.md) — covering scopes,
+> assignable principals, agents as non-principals, and private-by-default projects. It is a
+> proposal, not a description of how Scion behaves today.
 
 ### 20. `hub_id` defaults to a value derived from the hostname, silently re-namespacing every secret 🔴
 
@@ -781,7 +802,7 @@ startup when chat is enabled without a store. And add `message_broker` and `nati
 `settings-v1.schema.json`, since `additionalProperties: false` currently makes a working
 configuration an invalid one.
 
-### 31. Progeny agents still cannot inherit captured credentials after #1292 — two further blockers 🔴
+### 31. Progeny agents still cannot inherit captured credentials after #1292 — three further blockers 🔴
 
 An orchestrator creates sub-agents; the sub-agents come up unauthenticated. Preston diagnosed
 this and shipped `4b683622` ("make hasAnyKey progeny-aware", #1292, closing #1252): for a
@@ -790,7 +811,8 @@ progeny agent, `agent.OwnerID` is the *creating agent's* ID, so the user-scope l
 
 **That fix is correct, it is deployed here, and the symptom persists.** We upgraded to
 `aedf89ed` (which contains it) at 19:41 and the progeny agents below were created at 20:32 —
-after the fix, still with no credentials. Two further conditions have to hold, and neither does.
+after the fix, still with no credentials. Three further conditions have to hold, and none of
+them does.
 
 The state, straight from the hub database:
 
@@ -869,7 +891,7 @@ analyst      20:51:57  ancestry=2  harnessAuth='auth-file'   noAuth=—
 
 and the credential file is delivered into the containers (`/home/scion/.copilot/config.json`,
 mode 600). Changing those two columns — and nothing else — is what moved it, which confirms
-both blockers above are real and that they are the only two remaining after #1292.
+both blockers above are real. A third remains behind them, described next.
 
 **The symptom to recognise.** Before the fix the failure surfaced as a complaint about
 `COPILOT_GITHUB_TOKEN` not existing, which is misleading: that key belongs to the *other* auth
@@ -1547,6 +1569,13 @@ skills, stating the topology and the two consequences: mount socket paths by the
 and pass file bindings by named volume rather than host path. Setting an explicit marker in the
 agent environment (e.g. `SCION_DOCKER_TOPOLOGY=sibling`) would let a skill trigger on it. This is
 cheap and would have saved us most of a day.
+
+> **A proposal follows from this one.** Agents cannot run containers at all today, which makes
+> Testcontainers and buildpack builds impossible. See
+> [`docker-support-proposal/`](docker-support-proposal/docker-support-proposal.md) for a way to
+> allow it without granting host root — including the rootless-daemon reference implementation
+> we run on our own hub, and an A/B test showing why the socket has to be mounted at an
+> identical path on both sides.
 
 ### 42. A message containing `<template>` silently loses everything after it 🟠
 
@@ -2333,7 +2362,7 @@ Ordered by priority, not by issue number.
 | **35** | **Rewrite the project marker on creation — a recreated project inherits the deleted one's id and all agent creation fails** | **Blocking** | **Trivial** |
 | **33** | **Build the authenticated clone URL with `net/url` instead of `strings.Replace` — any remote with a username currently gets corrupted credentials** | **Blocking** | **Trivial** |
 | **31** | **Progeny credential inheritance is unreachable for agent-captured secrets: `created_by` carries an `agent:` prefix the ancestry match does not strip** | **Blocking** | Low |
-| **11** | **Local backend stores plaintext while its comment claims writes are rejected** | **Security** | Low–Med |
+| ~~11~~ | ~~Local backend stores plaintext while its comment claims writes are rejected~~ — **resolved** in `af102183` (#1253). Kept for the caveats it leaves behind: see 13 and 21 | — | Done |
 | **16** | **All authenticated users can read all projects by default; `visibility` is inert** | **Security** | Low |
 | **17** | **`viewer` role implies a restriction it does not enforce** | **Security** | Low |
 | **18** | **Per-project member seed omits `project: read` — membership confers no visibility** | **Security** | Low |
@@ -2348,7 +2377,7 @@ Ordered by priority, not by issue number.
 | 14 | Add `telemetry.cloud.gcp_project_id` to the settings template | High | Trivial |
 | 15 | Add `roles/monitoring.viewer` in `gce-demo-provision.sh` | High | Trivial |
 | 12 | Fix `SCION_HUB_ENDPOINT` → `SCION_SERVER_HUB_ENDPOINT` in `hub.env.sample` | High | Trivial |
-| 3 | Remove or implement `default_runtime` | High | Low |
+| ~~3~~ | ~~Remove or implement `default_runtime`~~ — **resolved**: gone from `pkg/config` as of `2b8be982` | — | Done |
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |

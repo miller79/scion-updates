@@ -1610,6 +1610,68 @@ HTML passthrough — so nothing legitimate is lost. If raw HTML in chat is delib
 then `template` needs adding to DOMPurify's `ALLOWED_TAGS` *and* the content fragment reattached,
 which is considerably more work for no obvious benefit.
 
+### 43. A project's git branch can be set only at creation, and never changed 🟠
+
+**What happened:** we created a project from an Azure DevOps repo while working on a feature
+branch, `jisaal1/add-scion-templates`. Once that branch merged we wanted the project to track
+`main` instead. There is no way to do this in the product.
+
+The branch lives in the project's label map as `scion.dev/default-branch`. It is **read** in
+three places, each falling back to `main` when the label is absent:
+
+- `pkg/hub/handlers_agent_create_helpers.go:138` and `:165` — the branch an agent is created on
+- `pkg/hub/handlers_projects_core.go:1093` — the branch used for the shared-workspace clone
+
+It is **written** in exactly one place: `web/src/components/pages/project-create.ts:603`, the
+create-project form. `project-settings.ts` has no branch field in any of its tabs.
+
+So the value is write-once at creation, and every later consumer silently keeps using it.
+
+**Three separate obstacles to changing it**, each of which matters on its own:
+
+1. **No UI.** Nothing in project settings edits labels, and the branch is not surfaced as its
+   own first-class field anywhere.
+
+2. **The API can do it, but the shape is a trap.** `PATCH /api/v1/projects/{id}` accepts a
+   `labels` object, but `handlers_projects_core.go:2557` assigns it wholesale:
+
+   ```go
+   if updates.Labels != nil {
+       project.Labels = updates.Labels
+   }
+   ```
+
+   A caller who sends only `{"labels":{"scion.dev/default-branch":"main"}}` — the natural thing
+   to send, and what a partial-update verb like PATCH implies — silently destroys
+   `scion.dev/clone-url`, `scion.dev/source-url`, and `scion.dev/workspace-mode`. The project
+   then has no clone URL and every subsequent agent creation fails. Recovering means knowing
+   the label scheme well enough to reconstruct it by hand. There is no merge, and no validation
+   that the labels a project depends on survived the write.
+
+3. **Permission.** `PATCH /projects` requires project-owner. A `member` — including the person
+   who uses the project daily — is denied, so even the raw API is not a workaround for most
+   users.
+
+The only route left is editing the `labels` JSON in `hub.db` directly, which is what we did.
+That is not a reasonable ask for a routine, expected operation: repos rename their default
+branch, feature branches merge, and teams switch from `master` to `main`.
+
+**Suggested fix**, roughly in order of value:
+
+- Add a branch field to project settings — it is a one-line label write and the highest-value
+  part of this.
+- Make `PATCH` **merge** labels rather than replace them, or add an explicit
+  `labelsReplace: true` flag so the destructive behaviour is opt-in. Merging is the behaviour
+  the verb already implies.
+- Reject a `PATCH` that would leave a git-backed project without `scion.dev/clone-url`, rather
+  than accepting it and failing later at agent-creation time.
+- Consider promoting branch and clone-url out of the free-form label map into real project
+  columns. They are load-bearing configuration rather than user metadata, and the label map
+  gives them no schema, no validation, and no protection from a clobbering write.
+
+**Note on scope:** this is only about the *default* branch recorded on the project. Per-agent
+branch selection at agent-creation time works fine, and is unaffected.
+
 ## Docs that are wrong
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
@@ -2290,6 +2352,7 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 43 | Add a branch field to project settings; make `PATCH /projects` **merge** labels instead of replacing them — a partial label write silently destroys the project's clone URL | High | Low |
 | 42 | Escape HTML in chat markdown instead of passing it through — `<template>` in prose silently truncates the message | High | Trivial |
 | 38 | Merge `profile.Env` like `override.Env`, or drop `env` from the profileConfig schema and reject it | High | Trivial |
 | 39 | Tell agents they are sibling containers: host-path bind mounts silently mount empty dirs | High | Low |

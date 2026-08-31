@@ -32,8 +32,8 @@ attribution needed, no need to ask.
 | [**role-model-proposal/**](role-model-proposal/) | A target-state proposal for roles and permissions — not a description of current behaviour. |
 | [**docker-support-proposal/**](docker-support-proposal/) | How agents could run containers (Testcontainers, buildpacks) without granting host root — including a working reference implementation we run today. |
 
-Latest: [**2026-08-25**](updates/2026-08-25.md) — rebuilding every container image behind a
-corporate proxy, and half an hour spent believing a 404 was a policy decision.
+Latest: [**2026-08-31**](updates/2026-08-31.md) — changing a project's git branch turns out to
+need a database edit, and the API route that should do it quietly deletes the clone URL.
 
 ## Fixed since we started reporting
 
@@ -60,6 +60,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 35 | Delete a git project and recreate it with the same name, and every agent creation fails — the on-disk marker still points at the deleted project | 🔴 Blocking | Trivial |
 | 33 | Clone credentials injected via `strings.Replace` — any remote whose URL carries a username (e.g. every Azure DevOps clone URL) gets a corrupted token and a misleading "repo not found" | 🔴 Blocking | Trivial |
 | 34 | A project-scoped `GITHUB_TOKEN` can never authenticate the initial clone — the clone runs during project creation, and there is no retry | 🟠 High | Low |
+| 43 | A project's git branch is write-once at creation — no UI to change it, and the `PATCH` that could silently wipes the project's clone URL along with it | 🟠 High | Low |
 | 42 | A chat message containing `<template>` renders truncated — everything after it silently disappears, though copy-paste still yields the full text | 🟠 High | Trivial |
 | 38 | Profile-level `env` is in the schema and silently ignored, while `volumes` in the same block works | 🟠 High | Trivial |
 | 39 | Agents are sibling containers to the Docker daemon — host-path bind mounts silently mount an **empty directory** instead of failing | 🟠 High | Low |
@@ -123,7 +124,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 42 items" is easy to write and harder to trust:
+Worth saying, since "we found 43 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms

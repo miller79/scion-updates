@@ -1701,6 +1701,95 @@ branch, feature branches merge, and teams switch from `master` to `main`.
 **Note on scope:** this is only about the *default* branch recorded on the project. Per-agent
 branch selection at agent-creation time works fine, and is unaffected.
 
+### 44. No way to start an agent with a clean, private workspace — a project is mandatory, and a non-git project shares one directory across every agent 🟠
+
+Two related gaps, one a feature request and one a defect we have already been bitten by.
+
+**A project is required, always.** `pkg/hub/handlers_agents_core.go:392`:
+
+```go
+if req.ProjectID == "" {
+    ValidationError(w, "projectId is required", nil)
+    return
+}
+```
+
+There is no way to create an agent without first creating a project. For a great many tasks
+this is ceremony with no payoff: the agent is going to `git clone` what it needs, or write
+throwaway scratch code, or answer a question about a repo it fetches itself. Anchoring it to a
+project first means naming a thing, creating it, and then remembering to clean it up.
+
+Agents are already perfectly capable of fetching their own inputs — that is most of what they
+do. The project is doing real work when it carries shared secrets, membership and a canonical
+checkout. When it carries none of those, it is an empty shell we are obliged to create anyway.
+
+**The closest thing available today is a project with no git remote, and it is not private.**
+Every workspace mode is gated on the remote being set. `pkg/store/models.go:374`:
+
+```go
+func (p *Project) IsSharedWorkspace() bool {
+    return p.GitRemote != "" && p.Labels[LabelWorkspaceMode] == WorkspaceModeShared
+}
+func (p *Project) IsWorktreePerAgent() bool {
+    return p.GitRemote != "" && p.Labels[LabelWorkspaceMode] == WorkspaceModeWorktreePerAgent
+}
+```
+
+So does the label that would set one — `handlers_projects_core.go:359`:
+
+```go
+if normalizedRemote != "" {
+    switch req.WorkspaceMode {
+    case store.WorkspaceModeShared, store.WorkspaceModeWorktreePerAgent:
+        req.Labels[store.LabelWorkspaceMode] = req.WorkspaceMode
+    }
+}
+```
+
+Pass `workspaceMode` on a project with no git remote and it is **silently dropped** — not
+rejected, not warned about. The request field's own comment says so
+(`handlers_projects_core.go:53`): *"only meaningful when gitRemote is set"*.
+
+With no mode possible, every agent in a non-git project falls through to the same branch of
+`populateAgentConfig` (`handlers_agent_create_helpers.go:150`) and receives
+`hubManagedProjectPath(project.Slug)` — a path derived from the **project slug alone**. Nothing
+in it varies per agent. Ten agents in a non-git project all get the same directory, mounted
+read-write, with no isolation and nothing announcing it.
+
+`WorkspaceModePerAgent = "per-agent"` is defined at `models.go:237` and documented as the
+default, but it is only ever the default *for git projects*, meaning clone-per-agent. It cannot
+be selected for a project that has nothing to clone.
+
+**This is not theoretical.** We hit it: a set of agents in a non-git project came up with each
+other's identities. The harness writes its system prompt into a file in the workspace, every
+agent had the same workspace, and the last writer won. The agents were not misconfigured and
+the hub reported nothing wrong — they were simply sharing a directory we had no idea was
+shared, because we had not asked for a shared workspace and the UI never offered us the choice.
+We moved the work to a git-backed project to get isolation back.
+
+**What we would like:** an *empty shell* — a workspace that starts empty, belongs to exactly
+one agent, and is discarded with it. No remote, no clone, no seeding. The agent brings its own
+content.
+
+**Suggested fix**, smallest first:
+
+- **Honour `per-agent` for non-git projects.** The constant exists and the semantics are
+  obvious: give each agent its own empty directory instead of one keyed by project slug. This
+  alone fixes the collision and delivers most of the value.
+- **Stop silently dropping `workspaceMode` on non-git projects** — either apply it or reject it
+  with a message. Silently ignoring a field the caller set is how the above stayed invisible.
+- **Make `projectId` optional**, resolving to a per-user personal or scratch project when
+  absent. That keeps every downstream assumption (secrets scope, membership, authorization)
+  intact while removing the ceremony — a smaller change than making projects genuinely optional
+  throughout, and it gets the ergonomics we are asking for.
+- Consider marking such agents ephemeral, so the workspace is reclaimed on delete rather than
+  accumulating. Related: we already prune Docker state on a timer for this reason.
+
+**Note on scope:** we are not asking for projects to go away. They earn their place when they
+carry shared secrets, membership, or a canonical checkout. The ask is that an agent which needs
+none of those should not have to invent one, and that when it does, its workspace should be its
+own.
+
 ## Docs that are wrong
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
@@ -2381,6 +2470,7 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 44 | Honour `per-agent` workspaces for non-git projects — today every agent in one shares a single directory keyed by project slug, silently; and let an agent be created without a project | High | Low |
 | 43 | Add a branch field to project settings; make `PATCH /projects` **merge** labels instead of replacing them — a partial label write silently destroys the project's clone URL | High | Low |
 | 42 | Escape HTML in chat markdown instead of passing it through — `<template>` in prose silently truncates the message | High | Trivial |
 | 38 | Merge `profile.Env` like `override.Env`, or drop `env` from the profileConfig schema and reject it | High | Trivial |

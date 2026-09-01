@@ -32,8 +32,8 @@ attribution needed, no need to ask.
 | [**role-model-proposal/**](role-model-proposal/) | A target-state proposal for roles and permissions — not a description of current behaviour. |
 | [**docker-support-proposal/**](docker-support-proposal/) | How agents could run containers (Testcontainers, buildpacks) without granting host root — including a working reference implementation we run today. |
 
-Latest: [**2026-08-31**](updates/2026-08-31.md) — changing a project's git branch turns out to
-need a database edit, and the API route that should do it quietly deletes the clone URL.
+Latest: [**2026-08-31**](updates/2026-08-31.md) — changing a project's git branch needs a
+database edit, and every agent in a non-git project turns out to share one workspace directory.
 
 ## Fixed since we started reporting
 
@@ -60,6 +60,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 35 | Delete a git project and recreate it with the same name, and every agent creation fails — the on-disk marker still points at the deleted project | 🔴 Blocking | Trivial |
 | 33 | Clone credentials injected via `strings.Replace` — any remote whose URL carries a username (e.g. every Azure DevOps clone URL) gets a corrupted token and a misleading "repo not found" | 🔴 Blocking | Trivial |
 | 34 | A project-scoped `GITHUB_TOKEN` can never authenticate the initial clone — the clone runs during project creation, and there is no retry | 🟠 High | Low |
+| 44 | Every agent in a **non-git** project shares one workspace directory — no per-agent mode exists, `workspaceMode` is silently dropped, and agents overwrite each other's files. Also: no way to run an agent without a project at all | 🟠 High | Low |
 | 43 | A project's git branch is write-once at creation — no UI to change it, and the `PATCH` that could silently wipes the project's clone URL along with it | 🟠 High | Low |
 | 42 | A chat message containing `<template>` renders truncated — everything after it silently disappears, though copy-paste still yields the full text | 🟠 High | Trivial |
 | 38 | Profile-level `env` is in the schema and silently ignored, while `volumes` in the same block works | 🟠 High | Trivial |
@@ -124,7 +125,7 @@ authorization model were all genuinely nice to work with.
 
 ## On the verification
 
-Worth saying, since "we found 43 items" is easy to write and harder to trust:
+Worth saying, since "we found 44 items" is easy to write and harder to trust:
 
 - Everything cites the specific file, usually the function
 - Behaviour was checked against the source rather than guessed from symptoms

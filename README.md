@@ -104,7 +104,6 @@ Keycloak SSO, TLS via BIG-IP)
 | 15 | Provision script grants `logging.viewer` but not `monitoring.viewer` | 🟠 High | Trivial | [#17](https://github.com/miller79/scion/issues/17) |
 | 12 | `SCION_HUB_ENDPOINT` in `hub.env.sample` isn't wired to anything | 🟠 High | Trivial | [#15](https://github.com/miller79/scion/issues/15) |
 | 1 | Go pinned to 1.23.0 vs `go.mod` 1.26.1 — usually masked by `GOTOOLCHAIN=auto`, breaks air-gapped builds | 🟠 High | Low | [#12](https://github.com/miller79/scion/issues/12) |
-| 5 | The OIDC guide says HTTPS is required — it isn't | 🟠 High | Trivial | _held_ |
 | 8 | Unknown `settings.yaml` keys vanish with no warning | 🟠 High | Low | [#19](https://github.com/miller79/scion/issues/19) |
 | 7 | No real path for internal-only / bring-your-own-cert / IAP setups | 🟠 High | Medium | _held_ |
 | 23 | The same config field is spelled `gcp_project_id` or `gcpProjectId` depending on where you set it; the wrong one is silently dropped | 🟡 Medium | Low | [#18](https://github.com/miller79/scion/issues/18) |

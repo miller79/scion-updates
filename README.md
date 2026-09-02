@@ -55,53 +55,66 @@ Credit where it's due — these moved:
 members group, closing an escalation where owning *any* explicit group in a project conferred
 project-owner rights.
 
+## Where these now live
+
+At Preston's suggestion these are being filed as issues on
+**[miller79/scion](https://github.com/miller79/scion/issues)**, a fork he can merge from
+directly. **23 are filed** (see the *Filed* column below); this repo stays as the narrative
+record — the daily entries, the reasoning, and the wrong turns — while the fork carries the
+actionable items.
+
+The remaining 15 open items are marked **_held_**. Each was established by observing a running
+hub rather than by reading source, and our hub is deliberately still on `aedf89ed` while the
+fork is at `fd818e08`. They will be filed once we upgrade and re-test, rather than asserted on
+a build we have not exercised.
+
 ## What's still open
 
 Full write-up: [**FINDINGS.md**](FINDINGS.md)
 (source re-verified at `fd818e08`; our hub is still deployed at `aedf89ed`, Ubuntu 24.04,
 Keycloak SSO, TLS via BIG-IP)
 
-| # | Issue | Severity | Effort |
-|---|---|---|---|
-| 31 | Progeny agents still get no credentials after the #1292 fix — **three** further blockers, incl. `resolveSecrets` returning `count=0` with ancestry present | 🔴 **Security** | Low |
-| 35 | Delete a git project and recreate it with the same name, and every agent creation fails — the on-disk marker still points at the deleted project | 🔴 Blocking | Trivial |
-| 33 | Clone credentials injected via `strings.Replace` — any remote whose URL carries a username (e.g. every Azure DevOps clone URL) gets a corrupted token and a misleading "repo not found" | 🔴 Blocking | Trivial |
-| 34 | A project-scoped `GITHUB_TOKEN` can never authenticate the initial clone — the clone runs during project creation, and there is no retry | 🟠 High | Low |
-| 44 | Every agent in a **non-git** project shares one workspace directory — no per-agent mode exists, `workspaceMode` is silently dropped, and agents overwrite each other's files. Also: no way to run an agent without a project at all | 🟠 High | Low |
-| 43 | A project's git branch is write-once at creation — no UI to change it, and the `PATCH` that could silently wipes the project's clone URL along with it | 🟠 High | Low |
-| 42 | A chat message containing `<template>` renders truncated — everything after it silently disappears, though copy-paste still yields the full text | 🟠 High | Trivial |
-| 38 | Profile-level `env` is in the schema and silently ignored, while `volumes` in the same block works | 🟠 High | Trivial |
-| 39 | Agents are sibling containers to the Docker daemon — host-path bind mounts silently mount an **empty directory** instead of failing | 🟠 High | Low |
-| 37 | `git-sandbox` skill never injected into clone-per-agent workspaces — its condition reuses a boolean that means "don't make worktrees here" — and its content claims an air-gap that does not exist | 🟠 High | Medium |
-| 40 | File secrets are also injected as an env var holding the same bytes — any subprocess of the agent (build script, npm postinstall, test) can read every secret | 🔴 **Security** | Low |
-| 41 | Anything an agent prints persists in the message store **and** the host journal, credentials included, with no redaction and no way to retract | 🔴 **Security** | Low |
-| 13 | `--session-secret` in the systemd template leaks the signing secret into `ps` — and now also undermines 11's encryption-at-rest fix, which derives its key from it | 🔴 **Security** | Trivial |
-| 21 | Secret Manager values are rewritten to SQLite in cleartext on every boot; the signing keys bypass 11's encryption entirely | 🔴 **Security** | Low |
-| 20 | `hub_id` derives from the hostname; a hostname change silently re-namespaces every secret | 🔴 **Security** | Low |
-| 22 | Signing keys derive from `SESSION_SECRET`; rotation is undocumented and leaves superseded versions enabled | 🟠 **Security** | Low |
-| 24 | Harness-config files unreachable in both broker resolution paths break every agent start, while `/healthz` reports healthy | 🔴 Blocking | Low |
-| 2 | `gce-start-hub.sh` does `git push origin main`, which nobody outside the repo can do | 🔴 Blocking | Low |
-| 4 | The OIDC guide gives a redirect URI route that doesn't exist | 🔴 Blocking | Trivial |
-| 25 | Create Project shows a permission error to every non-admin on page load, before they touch anything | 🟠 High | Trivial |
-| 28 | Metrics dashboard is reachable by non-admins but its endpoint is admin-only — repeating 403s and permission toasts on a timer | 🟠 High | Trivial |
-| 30 | Chat is on by default but its store is only created when the message broker is enabled — UI renders, every send 503s, and the fix key is absent from the settings schema | 🟠 High | Low |
-| 29 | Agent telemetry is on by default, can never authenticate without a registered service account, and retries forever at `INFO` | 🟠 High | Low |
-| 26 | No way to hide an unused harness, and `harness-config delete` silently reverts on restart | 🟠 High | Low |
-| 14 | Settings template misses `telemetry.cloud.gcp_project_id`, so the metrics dashboard is dead | 🟠 High | Trivial |
-| 15 | Provision script grants `logging.viewer` but not `monitoring.viewer` | 🟠 High | Trivial |
-| 12 | `SCION_HUB_ENDPOINT` in `hub.env.sample` isn't wired to anything | 🟠 High | Trivial |
-| 1 | Go pinned to 1.23.0 vs `go.mod` 1.26.1 — usually masked by `GOTOOLCHAIN=auto`, breaks air-gapped builds | 🟠 High | Low |
-| 5 | The OIDC guide says HTTPS is required — it isn't | 🟠 High | Trivial |
-| 8 | Unknown `settings.yaml` keys vanish with no warning | 🟠 High | Low |
-| 7 | No real path for internal-only / bring-your-own-cert / IAP setups | 🟠 High | Medium |
-| 23 | The same config field is spelled `gcp_project_id` or `gcpProjectId` depending on where you set it; the wrong one is silently dropped | 🟡 Medium | Low |
-| 6 | Dev-auth cleanup command deletes the wrong username (so, nothing) | 🟡 Medium | Trivial |
-| 9 | The image build cannot be pointed at an internal package registry — behind one, **no image builds at all**. Patch available | 🟠 High | Low |
-| 27 | Image build can only target groups, so one unbuildable image blocks unrelated ones | 🟡 Medium | Low |
-| 19 | No way to import a template except from a URL or server-side files — no zip upload *(feature request)* | 🟡 Low | Low |
-| 32 | Agents cannot create a chat thread — every chat endpoint is user-identity-only, so an orchestrator can't give its team a home *(feature request)* | 🟡 Low | Medium |
-| 36 | Terminal link in the chat members sidebar forces a new browser tab, while the adjacent pop-out link looks different but behaves the same | 🟡 Low | Trivial |
-| 10 | Small stuff: no `--version` alias, NATS still installed, a placeholder registry that looks real | 🟡 Low | Low |
+| # | Issue | Severity | Effort | Filed |
+|---|---|---|---|---|
+| 31 | Progeny agents still get no credentials after the #1292 fix — **three** further blockers, incl. `resolveSecrets` returning `count=0` with ancestry present | 🔴 **Security** | Low | _held_ |
+| 35 | Delete a git project and recreate it with the same name, and every agent creation fails — the on-disk marker still points at the deleted project | 🔴 Blocking | Trivial | _held_ |
+| 33 | Clone credentials injected via `strings.Replace` — any remote whose URL carries a username (e.g. every Azure DevOps clone URL) gets a corrupted token and a misleading "repo not found" | 🔴 Blocking | Trivial | [#2](https://github.com/miller79/scion/issues/2) |
+| 34 | A project-scoped `GITHUB_TOKEN` can never authenticate the initial clone — the clone runs during project creation, and there is no retry | 🟠 High | Low | _held_ |
+| 44 | Every agent in a **non-git** project shares one workspace directory — no per-agent mode exists, `workspaceMode` is silently dropped, and agents overwrite each other's files. Also: no way to run an agent without a project at all | 🟠 High | Low | [#9](https://github.com/miller79/scion/issues/9) |
+| 43 | A project's git branch is write-once at creation — no UI to change it, and the `PATCH` that could silently wipes the project's clone URL along with it | 🟠 High | Low | [#8](https://github.com/miller79/scion/issues/8) |
+| 42 | A chat message containing `<template>` renders truncated — everything after it silently disappears, though copy-paste still yields the full text | 🟠 High | Trivial | [#10](https://github.com/miller79/scion/issues/10) |
+| 38 | Profile-level `env` is in the schema and silently ignored, while `volumes` in the same block works | 🟠 High | Trivial | [#11](https://github.com/miller79/scion/issues/11) |
+| 39 | Agents are sibling containers to the Docker daemon — host-path bind mounts silently mount an **empty directory** instead of failing | 🟠 High | Low | _held_ |
+| 37 | `git-sandbox` skill never injected into clone-per-agent workspaces — its condition reuses a boolean that means "don't make worktrees here" — and its content claims an air-gap that does not exist | 🟠 High | Medium | _held_ |
+| 40 | File secrets are also injected as an env var holding the same bytes — any subprocess of the agent (build script, npm postinstall, test) can read every secret | 🔴 **Security** | Low | [#7](https://github.com/miller79/scion/issues/7) |
+| 41 | Anything an agent prints persists in the message store **and** the host journal, credentials included, with no redaction and no way to retract | 🔴 **Security** | Low | _held_ |
+| 13 | `--session-secret` in the systemd template leaks the signing secret into `ps` — and now also undermines 11's encryption-at-rest fix, which derives its key from it | 🔴 **Security** | Trivial | [#1](https://github.com/miller79/scion/issues/1) |
+| 21 | Secret Manager values are rewritten to SQLite in cleartext on every boot; the signing keys bypass 11's encryption entirely | 🔴 **Security** | Low | [#5](https://github.com/miller79/scion/issues/5) |
+| 20 | `hub_id` derives from the hostname; a hostname change silently re-namespaces every secret | 🔴 **Security** | Low | [#4](https://github.com/miller79/scion/issues/4) |
+| 22 | Signing keys derive from `SESSION_SECRET`; rotation is undocumented and leaves superseded versions enabled | 🟠 **Security** | Low | [#6](https://github.com/miller79/scion/issues/6) |
+| 24 | Harness-config files unreachable in both broker resolution paths break every agent start, while `/healthz` reports healthy | 🔴 Blocking | Low | _held_ |
+| 2 | `gce-start-hub.sh` does `git push origin main`, which nobody outside the repo can do | 🔴 Blocking | Low | [#3](https://github.com/miller79/scion/issues/3) |
+| 4 | The OIDC guide gives a redirect URI route that doesn't exist | 🔴 Blocking | Trivial | [#20](https://github.com/miller79/scion/issues/20) |
+| 25 | Create Project shows a permission error to every non-admin on page load, before they touch anything | 🟠 High | Trivial | _held_ |
+| 28 | Metrics dashboard is reachable by non-admins but its endpoint is admin-only — repeating 403s and permission toasts on a timer | 🟠 High | Trivial | _held_ |
+| 30 | Chat is on by default but its store is only created when the message broker is enabled — UI renders, every send 503s, and the fix key is absent from the settings schema | 🟠 High | Low | _held_ |
+| 29 | Agent telemetry is on by default, can never authenticate without a registered service account, and retries forever at `INFO` | 🟠 High | Low | _held_ |
+| 26 | No way to hide an unused harness, and `harness-config delete` silently reverts on restart | 🟠 High | Low | _held_ |
+| 14 | Settings template misses `telemetry.cloud.gcp_project_id`, so the metrics dashboard is dead | 🟠 High | Trivial | [#16](https://github.com/miller79/scion/issues/16) |
+| 15 | Provision script grants `logging.viewer` but not `monitoring.viewer` | 🟠 High | Trivial | [#17](https://github.com/miller79/scion/issues/17) |
+| 12 | `SCION_HUB_ENDPOINT` in `hub.env.sample` isn't wired to anything | 🟠 High | Trivial | [#15](https://github.com/miller79/scion/issues/15) |
+| 1 | Go pinned to 1.23.0 vs `go.mod` 1.26.1 — usually masked by `GOTOOLCHAIN=auto`, breaks air-gapped builds | 🟠 High | Low | [#12](https://github.com/miller79/scion/issues/12) |
+| 5 | The OIDC guide says HTTPS is required — it isn't | 🟠 High | Trivial | _held_ |
+| 8 | Unknown `settings.yaml` keys vanish with no warning | 🟠 High | Low | [#19](https://github.com/miller79/scion/issues/19) |
+| 7 | No real path for internal-only / bring-your-own-cert / IAP setups | 🟠 High | Medium | _held_ |
+| 23 | The same config field is spelled `gcp_project_id` or `gcpProjectId` depending on where you set it; the wrong one is silently dropped | 🟡 Medium | Low | [#18](https://github.com/miller79/scion/issues/18) |
+| 6 | Dev-auth cleanup command deletes the wrong username (so, nothing) | 🟡 Medium | Trivial | _held_ |
+| 9 | The image build cannot be pointed at an internal package registry — behind one, **no image builds at all**. Patch available | 🟠 High | Low | [#13](https://github.com/miller79/scion/issues/13) |
+| 27 | Image build can only target groups, so one unbuildable image blocks unrelated ones | 🟡 Medium | Low | [#14](https://github.com/miller79/scion/issues/14) |
+| 19 | No way to import a template except from a URL or server-side files — no zip upload *(feature request)* | 🟡 Low | Low | _held_ |
+| 32 | Agents cannot create a chat thread — every chat endpoint is user-identity-only, so an orchestrator can't give its team a home *(feature request)* | 🟡 Low | Medium | [#21](https://github.com/miller79/scion/issues/21) |
+| 36 | Terminal link in the chat members sidebar forces a new browser tab, while the adjacent pop-out link looks different but behaves the same | 🟡 Low | Trivial | [#22](https://github.com/miller79/scion/issues/22) |
+| 10 | Small stuff: no `--version` alias, NATS still installed, a placeholder registry that looks real | 🟡 Low | Low | [#23](https://github.com/miller79/scion/issues/23) |
 
 **If you only look at three:**
 

@@ -1507,6 +1507,24 @@ unsatisfied condition would have ended it immediately.
 
 ### 38. Profile-level `env` is accepted by the schema and silently ignored 🟠
 
+> **CORRECTED 2026-09-02 — our original framing was wrong.** We reported this as a missing merge
+> and suggested restoring it. It is not an oversight. `pkg/config/settings_v1.go:53` records that
+> `profiles.<name>.env` was removed deliberately in Gap 3 ("G3-full") as a breaking change, on a
+> product-owner rationale — *"settings schema has gotten pretty rich, need to pare down the number
+> of control and injection points"* — and states plainly: *"Do not restore the merge because a
+> caller appears to want profile env: the removal is the feature, not an oversight."* Two tests pin
+> it. We had not read far enough up the file.
+>
+> **What survives is narrower.** The `Env` field is still declared on `ProfileConfig`
+> (`settings.go:61`) with yaml/koanf tags, so the key parses, validates, is written back on
+> rewrite, and does nothing — with no warning. `volumes` sits beside it in the same struct and
+> does work, which is what made it look supported. The fix we should have asked for is to remove
+> the field or reject the key, naming the documented migration path `harness_configs.<hc>.env`
+> (explicitly *not* `harness_overrides.<hc>.env`).
+>
+> Filed as [#11](https://github.com/miller79/scion/issues/11), rewritten there with the original
+> claim preserved in a comment.
+
 We set two things in the same `profiles.local` block. One took effect, the other vanished:
 
 ```yaml
@@ -2523,7 +2541,7 @@ Ordered by priority, not by issue number.
 | 44 | Honour `per-agent` workspaces for non-git projects — today every agent in one shares a single directory keyed by project slug, silently; and let an agent be created without a project | High | Low |
 | 43 | Add a branch field to project settings; make `PATCH /projects` **merge** labels instead of replacing them — a partial label write silently destroys the project's clone URL | High | Low |
 | 42 | Escape HTML in chat markdown instead of passing it through — `<template>` in prose silently truncates the message | High | Trivial |
-| 38 | Merge `profile.Env` like `override.Env`, or drop `env` from the profileConfig schema and reject it | High | Trivial |
+| 38 | Drop `env` from `ProfileConfig` or reject the key — its removal from the resolvers was deliberate, but the field still parses and is silently ignored | Medium | Trivial |
 | 39 | Tell agents they are sibling containers: host-path bind mounts silently mount empty dirs | High | Low |
 | 37 | Give `inject_when: git_workspace` its own signal instead of the worktree-suppression boolean; make the skill's air-gap content mode-conditional | High | Medium |
 | 34 | Make the clone-token error name the scopes searched, and add a retry-clone action | High | Low |

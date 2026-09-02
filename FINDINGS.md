@@ -172,6 +172,14 @@ The same argument applies to `--storage-bucket`, though a bucket name is not sen
 
 ### 16. Every authenticated user can read every project by default 🔴
 
+> **RESOLVED as of `fd818e08` (verified 2026-09-02, static).** The seeded roles were rebuilt.
+> `hubMemberPermissionIDs()` in `pkg/hub/seed.go` is now an explicit curated list that
+> deliberately excludes `project.list`, `project.read`, `agent.list` and `agent.read` at system
+> scope, with a comment naming the exact risk we reported — *"Including them would grant
+> cross-project admin-view visibility to every hub member via the hasAdminView handler
+> pattern"* — and a regression test, `TestGolden_CrossProjectVisibilityRegression`. Cross-project
+> visibility is now handled by project-scoped bindings. Left in place for the record.
+
 > **Partially addressed in `65482def` (#1254), verified at `2b8be982`.** Deleting a seeded
 > policy now sticks: policies carry an `Origin`, and a deletion records a
 > `seed.policy.deleted.<name>` tombstone the seeder honours. That closes the trap described
@@ -352,6 +360,11 @@ place.
 
 ### 17. The `viewer` role implies a restriction it does not provide 🟠
 
+> **RESOLVED as of `fd818e08` (verified 2026-09-02, static).** `hub-viewer` is now a distinct
+> seeded role with its own curated permission set (`hubViewerPermissionIDs()`), read-only and
+> carrying the same cross-project exclusions as `hub-member` but without `project.create`. It is
+> no longer identical to `member`.
+
 `viewer` is a first-class user role: it is in the ent enum
 (`admin` / `member` / `viewer`), it is selectable from the admin UI
 (`web/src/components/pages/admin-users.ts`), and it is the default role assigned to
@@ -371,6 +384,11 @@ alongside the existing admin bypass), or remove it from the enum and the admin U
 cannot imply a guarantee it does not make.
 
 ### 18. The per-project member seed is incomplete — membership does not confer visibility 🟠
+
+> **RESOLVED as of `fd818e08` (verified 2026-09-02, static).** `projectMemberPermissionIDs()`
+> now grants the `read` and `list` actions over `permissions.ResourceProject`, so project
+> membership confers project visibility. This was the specific gap that made 16's natural fix
+> hide projects from their own members; both sides are now addressed together.
 
 When a project is created, Scion auto-creates a members group and two policies
 (`createProjectMembersGroupAndPolicy`):
@@ -707,6 +725,13 @@ general fix in issue 25 — not letting background probes raise global error toa
 toast half of this too.
 
 ### 30. Chat is enabled by default but its backing store is not, so the UI renders and every send 503s 🟠
+
+> **PARTIALLY RESOLVED as of `fd818e08` (verified 2026-09-02, static).** The schema half is
+> fixed: `message_broker` and `native_chat` are both accepted keys now
+> (`pkg/config/hub_config.go:1033-1034`), so the setting that fixes this is no longer invisible
+> to `settings.yaml`. The default-enabled behaviour is unchanged on its face — `NativeChat` is
+> documented as *"Nil (absent) means enabled"* (`hub_config.go:461`) — but whether the UI still
+> renders against a nil store needs a live retest on this build, which we have not done.
 
 A member opened Scion Chat, selected their agent, typed a message, and got a red
 **"Chat not available"** above the composer. The agent showed *Working*, the roster listed it,
@@ -1353,6 +1378,12 @@ the database row while leaving the filesystem artefact that will resurrect or mi
 
 ### 37. The `git-sandbox` platform skill can never reach a clone-per-agent workspace, and its content is wrong for one that has network access 🟠
 
+> **NEEDS RETEST as of `fd818e08`.** `git-sandbox` no longer appears anywhere in the Go
+> sources — only in `docs-site/`, `changelog/` and `.design/`. The platform-skill seed we cited
+> is gone, so the injection path has been reworked and this finding cannot be confirmed or
+> retired by static inspection. The `SCION_HOST_UID` worktree-suppression gate it depends on
+> (`pkg/agent/provision.go`) is still present.
+
 Two problems that compound: the skill is not injected where it should be, and where it *is*
 injected its instructions may be false.
 
@@ -1794,6 +1825,17 @@ own.
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
 
+> **OBSOLETE AS WRITTEN as of `fd818e08` (verified 2026-09-02).** The draft has since been
+> published, as the *External OIDC Login Provider Support* section of
+> `docs-site/src/content/docs/hosted/single-node/auth.md`. **The wrong URI did not ship** — the
+> draft's two occurrences of `/api/v1/auth/oidc/callback` are absent from the published guide.
+>
+> A smaller issue replaces it: the published guide states **no redirect URI at all**, while the
+> reader must register one in their IdP to complete setup. The correct value is still
+> `BaseURL + "/auth/callback/" + provider` (`pkg/hub/web.go:1906`) with the provider slug `oidc`
+> (`OAuthProviderOIDC`), i.e. `https://<hub-domain>/auth/callback/oidc`. Worth one line in the
+> guide. Downgraded from 🔴 to 🟡.
+
 > **Source: the `oidc-setup.md` draft, not a file in this repository.** It was sent to us
 > directly rather than published, so it will not be found under `docs/` or `docs-site/`.
 > Our understanding is that it is a candidate for release — which is why these are worth
@@ -1824,6 +1866,11 @@ Anyone following the guide registers the wrong URI in their IdP and gets an opaq
 against an enterprise SSO team.
 
 ### 5. The guide overstates HTTPS as a prerequisite 🟠
+
+> **RESOLVED as of `fd818e08` (verified 2026-09-02).** The draft's prerequisite line — *"A
+> running Scion Hub instance with HTTPS (Caddy or similar TLS termination)"* — is not present in
+> the published guide. The adaptive behaviour we relied on is unchanged:
+> `Secure: strings.HasPrefix(cfg.BaseURL, "https://")` at `pkg/hub/web.go:517`.
 
 > **Source: the `oidc-setup.md` draft, not a file in this repository.** It was sent to us
 > directly rather than published, so it will not be found under `docs/` or `docs-site/`.
@@ -2389,6 +2436,9 @@ the behaviour is predictable before the click. Users who want a tab can still ct
 which works on a normal in-app link and does not today.
 
 ### 10. Minor items 🟡
+
+> **Re-checked at `fd818e08` (2026-09-02):** `scion --version` still has no alias — `version`
+> remains a subcommand only. NATS is still installed by cloud-init. Unchanged.
 
 - **`scion --version` doesn't exist** — it's `scion version`. The `--version` flag
   errors with `unknown flag`, which is a surprising first impression right after a

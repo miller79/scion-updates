@@ -8,7 +8,10 @@ show up when you're not deploying to a fresh public-internet VM. Rather than let
 knowledge evaporate, it's all here with file references so it's easy to act on.
 
 Everything is **re-verified against current `main` after every upgrade**, not written from
-memory. Most recently at `aedf89ed`, across six rounds of pulls.
+memory. Most recently at `fd818e08` (2026-09-02), across seven rounds of pulls. That last
+pass retired six issues — see *Fixed since we started reporting* — and is marked per-issue:
+`RESOLVED`, `OBSOLETE AS WRITTEN`, `PARTIALLY RESOLVED`, or `NEEDS RETEST` where a live
+deployment is required and ours is still on `aedf89ed`.
 
 ## The short version
 
@@ -32,8 +35,8 @@ attribution needed, no need to ask.
 | [**role-model-proposal/**](role-model-proposal/) | A target-state proposal for roles and permissions — not a description of current behaviour. |
 | [**docker-support-proposal/**](docker-support-proposal/) | How agents could run containers (Testcontainers, buildpacks) without granting host root — including a working reference implementation we run today. |
 
-Latest: [**2026-08-31**](updates/2026-08-31.md) — changing a project's git branch needs a
-database edit, and every agent in a non-git project turns out to share one workspace directory.
+Latest: [**2026-09-02**](updates/2026-09-02.md) — re-verifying all 44 issues against a fork 153
+commits ahead; six retired, including the whole cross-project visibility cluster.
 
 ## Fixed since we started reporting
 
@@ -42,7 +45,10 @@ Credit where it's due — these moved:
 | # | Issue | Fixed in |
 |---|---|---|
 | 11 | Local secrets backend stored plaintext while a comment claimed writes were rejected | `af102183` (#1253) — AES-256-GCM at rest, and the misleading comment corrected |
-| 16 | Deleting a seeded policy silently reverted on restart | `65482def` (#1254) — `Origin` field plus deletion tombstones. **The open-by-default wildcard itself is unchanged** |
+| 5 | OIDC guide overstated HTTPS as a prerequisite | The published guide omits the claim |
+| 16 | Every authenticated user could read every project — the open-by-default wildcard | `fd818e08` — hub-member/hub-viewer rebuilt as curated lists excluding `project.read`/`list` at system scope, guarded by `TestGolden_CrossProjectVisibilityRegression` |
+| 17 | `viewer` role selectable but identical to `member` | `fd818e08` — `hub-viewer` is now a distinct curated read-only role |
+| 18 | Project membership conferred no project visibility | `fd818e08` — `projectMemberPermissionIDs()` now grants project `read`/`list` |
 | 3 | `default_runtime` dead config key | Gone from `pkg/config` as of `2b8be982` (confirmed by search, not exercised) |
 
 `feb3e188` (#1250) also tightened `isProjectOwnerOrAdmin` to check only the canonical project
@@ -52,7 +58,8 @@ project-owner rights.
 ## What's still open
 
 Full write-up: [**FINDINGS.md**](FINDINGS.md)
-(deployed `main` @ `aedf89ed`, Ubuntu 24.04, Keycloak SSO, TLS via BIG-IP)
+(source re-verified at `fd818e08`; our hub is still deployed at `aedf89ed`, Ubuntu 24.04,
+Keycloak SSO, TLS via BIG-IP)
 
 | # | Issue | Severity | Effort |
 |---|---|---|---|
@@ -71,9 +78,6 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 13 | `--session-secret` in the systemd template leaks the signing secret into `ps` — and now also undermines 11's encryption-at-rest fix, which derives its key from it | 🔴 **Security** | Trivial |
 | 21 | Secret Manager values are rewritten to SQLite in cleartext on every boot; the signing keys bypass 11's encryption entirely | 🔴 **Security** | Low |
 | 20 | `hub_id` derives from the hostname; a hostname change silently re-namespaces every secret | 🔴 **Security** | Low |
-| 16 | Every authenticated user can read every project by default — `visibility: private` is inert | 🔴 **Security** | Low |
-| 17 | The `viewer` role is selectable but never enforced — identical to `member` | 🔴 **Security** | Low |
-| 18 | Project membership grants agent create/stop but **not** read — so fixing 16 hides projects from their own members | 🔴 **Security** | Low |
 | 22 | Signing keys derive from `SESSION_SECRET`; rotation is undocumented and leaves superseded versions enabled | 🟠 **Security** | Low |
 | 24 | Harness-config files unreachable in both broker resolution paths break every agent start, while `/healthz` reports healthy | 🔴 Blocking | Low |
 | 2 | `gce-start-hub.sh` does `git push origin main`, which nobody outside the repo can do | 🔴 Blocking | Low |
@@ -99,14 +103,11 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 36 | Terminal link in the chat members sidebar forces a new browser tab, while the adjacent pop-out link looks different but behaves the same | 🟡 Low | Trivial |
 | 10 | Small stuff: no `--version` alias, NATS still installed, a placeholder registry that looks real | 🟡 Low | Low |
 
-**If you only look at four:**
+**If you only look at three:**
 
 **31** first, because it is live work — the `hasAnyKey` fix in #1292 is correct and deployed
 here, and progeny agents still get no credentials. Three conditions sit behind it, one of them
 a one-line prefix mismatch. Worth seeing before #1252 is closed.
-
-**16 and 18** together are what most enterprises will care about — all users can read all
-projects out of the box, and the obvious fix hides projects from their own members.
 
 **13** is a one-line fix that now also protects the new encryption at rest.
 
@@ -156,7 +157,7 @@ Generalised — no internal hostnames or addresses in here.
 | Secrets | GCP Secret Manager backend, dedicated least-privilege service account |
 | Storage | GCS bucket, hub-namespaced |
 | Packages | Corporate Artifactory mirrors, public registries blocked |
-| Scion | `main` @ `90bf246e`, re-verified at `1b3c9418`, `1933d359`, `89ed0fe8`, `2b8be982`, and `aedf89ed` |
+| Scion | `main` @ `90bf246e`, re-verified at `1b3c9418`, `1933d359`, `89ed0fe8`, `2b8be982`, `aedf89ed`, and `fd818e08` |
 
 ## Questions
 

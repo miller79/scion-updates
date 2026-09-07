@@ -1,9 +1,15 @@
 # Notes from a Scion starter-hub deployment inside an enterprise
 
+> 📦 **Archived 2026-09-07.** No longer maintained. Every open finding below is filed at
+> [miller79/scion/issues](https://github.com/miller79/scion/issues); see the *Filed* column in the
+> [README](README.md). Kept for the record and the reasoning.
+
+---
+
 *Anthony Lofton — August 2026*
 
 We stood up a Scion Hub on an internal-only GCE VM (Ubuntu 24.04) with Keycloak SSO and TLS
-handled by an F5 BIG-IP. Running `main` @ `aedf89ed`.
+handled by an F5 BIG-IP. Final state of this report: `main` @ `8f66d97d`.
 
 **It works.** But we hit enough snags getting there that it seemed worth writing down —
 partly so the next person in a similar environment has an easier time, and partly because a

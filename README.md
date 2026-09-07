@@ -1,5 +1,19 @@
 # scion-updates
 
+> ## 📦 Archived — this repo is no longer maintained
+>
+> The work moved to **[miller79/scion/issues](https://github.com/miller79/scion/issues)**, a fork
+> the maintainer can merge from directly. **All 33 open findings are filed there**, along with both
+> proposals. Four were fixed by patches contributed from this work and closed with the merge.
+>
+> Nothing here is unfiled. This repo is kept **read-only, for history** — the dated entries and the
+> reasoning behind each finding, including the corrections. Final state: **45 findings, 12 fixed,
+> 33 open and filed**, all re-verified against a live hub at `8f66d97d` on 2026-09-07.
+>
+> New findings go to the fork.
+
+---
+
 Notes from running [**Scion**](https://github.com/GoogleCloudPlatform/scion) inside a big
 enterprise, written up for the maintainers.
 
@@ -7,9 +21,9 @@ We got it working — but hit a fair number of snags along the way, mostly in pl
 show up when you're not deploying to a fresh public-internet VM. Rather than let that
 knowledge evaporate, it's all here with file references so it's easy to act on.
 
-Everything is **re-verified against current `main` after every upgrade**, not written from
-memory. Most recently at `8f66d97d` (2026-09-07), across eight rounds of pulls — and this time
-against a **live hub upgraded to that commit**, not just its source. Twelve of the original 44
+Everything here was **re-verified against current `main` after every upgrade**, not written from
+memory — most recently at `8f66d97d` (2026-09-07), across eight rounds of pulls, and that last
+pass against a **live hub upgraded to that commit** rather than just its source. Twelve of the original 44
 are now fixed; four of those by patches we contributed. Each item is marked per-issue:
 `RESOLVED`, `OBSOLETE`, `PARTIALLY RESOLVED`, `CONFIRMED still present`, or
 `NOT REPRODUCIBLE` where our own configuration no longer triggers it.

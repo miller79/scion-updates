@@ -62,20 +62,26 @@ Credit where it's due — these moved:
 members group, closing an escalation where owning *any* explicit group in a project conferred
 project-owner rights.
 
-## Where these now live
+## This repo is now an archive - the work lives on the fork
 
-At Preston's suggestion these are being filed as issues on
-**[miller79/scion](https://github.com/miller79/scion/issues)**, a fork he can merge from
-directly. **26 are filed and open** (see the *Filed* column below), plus four filed and since
-closed by merged fixes. This repo stays as the narrative record — the daily entries, the
-reasoning, and the wrong turns — while the fork carries the actionable items.
+Everything actionable has moved to
+**[miller79/scion/issues](https://github.com/miller79/scion/issues)**, a fork Preston can merge
+from directly. **All 33 open findings are filed there**, along with both proposals
+([#36](https://github.com/miller79/scion/issues/36) role model,
+[#37](https://github.com/miller79/scion/issues/37) container support). Four findings were fixed
+by patches we contributed, and their issues closed with the merge.
 
-The remaining **6** are marked **_held_**: 24, 25, 28, 29, 30 and 31. Each needs a test we
-cannot run non-invasively on a hub other people are using — creating and deleting projects,
-spawning progeny agents, turning the message broker off, or driving the UI as a non-admin.
-Two of them (29 and 30) we specifically **could not reproduce** at `8f66d97d` because our own
-configuration no longer triggers them, which is not the same as them being fixed. They stay
-unfiled rather than asserted on evidence we do not have.
+**Nothing here is unfiled any more.** The *Filed* column below is complete.
+
+This repo stays as the **narrative record**, which an issue tracker cannot hold: eleven dated
+entries covering what we did, what we found, and - the part worth keeping - what we got wrong.
+The `strings.Replace` fix that turned out to inject tokens into SSH remotes. The half-hour spent
+convinced a set of 404s was a deliberate policy. The three-day outage attributed to two wrong
+causes before the right one. The issue we filed asking for exactly what the code told us not to
+do. Those corrections are why the findings read as evidence rather than assertion, and they do
+not survive translation into issue bodies.
+
+New findings go straight to the fork from here. This file is not being maintained further.
 
 ## What's still open
 
@@ -84,7 +90,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 
 | # | Issue | Severity | Effort | Filed |
 |---|---|---|---|---|
-| 31 | Progeny agents still get no credentials after the #1292 fix — **three** further blockers, incl. `resolveSecrets` returning `count=0` with ancestry present | 🔴 **Security** | Low | _held_ |
+| 31 | Progeny agents still get no credentials after the #1292 fix — **three** further blockers, incl. `resolveSecrets` returning `count=0` with ancestry present | 🔴 **Security** | Low | [#38](https://github.com/miller79/scion/issues/38) |
 | 35 | Delete a git project and recreate it with the same name, and every agent creation fails — the on-disk marker still points at the deleted project | 🔴 Blocking | Trivial | [#28](https://github.com/miller79/scion/issues/28) |
 | 45 | No protected or break-glass admin — `AdminEmails` is authoritative and all-or-nothing, so an edit naming one user silently demotes another on the next restart | 🟠 High | Low [#35](https://github.com/miller79/scion/issues/35) |
 | 44 | Every agent in a **non-git** project shares one workspace directory — no per-agent mode exists, `workspaceMode` is silently dropped, and agents overwrite each other's files. Also: no way to run an agent without a project at all | 🟠 High | Low | [#9](https://github.com/miller79/scion/issues/9) |
@@ -99,13 +105,13 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 | 21 | Secret Manager values are rewritten to SQLite in cleartext on every boot; the signing keys bypass 11's encryption entirely | 🔴 **Security** | Low | [#5](https://github.com/miller79/scion/issues/5) |
 | 20 | `hub_id` derives from the hostname; a hostname change silently re-namespaces every secret | 🔴 **Security** | Low | [#4](https://github.com/miller79/scion/issues/4) |
 | 22 | Signing keys derive from `SESSION_SECRET`; rotation is undocumented and leaves superseded versions enabled | 🟠 **Security** | Low | [#6](https://github.com/miller79/scion/issues/6) |
-| 24 | Harness-config files unreachable in both broker resolution paths break every agent start, while `/healthz` reports healthy | 🔴 Blocking | Low | _held_ |
+| 24 | Harness-config files unreachable in both broker resolution paths break every agent start, while `/healthz` reports healthy | 🔴 Blocking | Low | [#39](https://github.com/miller79/scion/issues/39) |
 | 2 | `gce-start-hub.sh` does `git push origin main`, which nobody outside the repo can do | 🔴 Blocking | Low | [#3](https://github.com/miller79/scion/issues/3) |
 | 4 | The OIDC guide gives a redirect URI route that doesn't exist | 🔴 Blocking | Trivial | [#20](https://github.com/miller79/scion/issues/20) |
-| 25 | Create Project shows a permission error to every non-admin on page load, before they touch anything | 🟠 High | Trivial | _held_ |
-| 28 | Metrics dashboard is reachable by non-admins but its endpoint is admin-only — repeating 403s and permission toasts on a timer | 🟠 High | Trivial | _held_ |
-| 30 | Chat is on by default but its store is only created when the message broker is enabled — UI renders, every send 503s, and the fix key is absent from the settings schema | 🟠 High | Low | _held_ |
-| 29 | Agent telemetry is on by default, can never authenticate without a registered service account, and retries forever at `INFO` | 🟠 High | Low | _held_ |
+| 25 | Create Project shows a permission error to every non-admin on page load, before they touch anything | 🟠 High | Trivial | [#40](https://github.com/miller79/scion/issues/40) |
+| 28 | Metrics dashboard is reachable by non-admins but its endpoint is admin-only — repeating 403s and permission toasts on a timer | 🟠 High | Trivial | [#41](https://github.com/miller79/scion/issues/41) |
+| 30 | Chat is on by default but its store is only created when the message broker is enabled — UI renders, every send 503s, and the fix key is absent from the settings schema | 🟠 High | Low | [#43](https://github.com/miller79/scion/issues/43) |
+| 29 | Agent telemetry is on by default, can never authenticate without a registered service account, and retries forever at `INFO` | 🟠 High | Low | [#42](https://github.com/miller79/scion/issues/42) |
 | 26 | No way to hide an unused harness, and `harness-config delete` silently reverts on restart | 🟠 High | Low | [#32](https://github.com/miller79/scion/issues/32) |
 | 14 | Settings template misses `telemetry.cloud.gcp_project_id`, so the metrics dashboard is dead | 🟠 High | Trivial | [#16](https://github.com/miller79/scion/issues/16) |
 | 12 | `SCION_HUB_ENDPOINT` in `hub.env.sample` isn't wired to anything | 🟠 High | Trivial | [#15](https://github.com/miller79/scion/issues/15) |

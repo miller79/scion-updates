@@ -1873,6 +1873,58 @@ carry shared secrets, membership, or a canonical checkout. The ask is that an ag
 none of those should not have to invent one, and that when it does, its workspace should be its
 own.
 
+### 45. No protected or break-glass administrator: `AdminEmails` is all-or-nothing 🟠
+
+`ReconcileSuperAdminBindings` (`pkg/hub/seed.go:1038`) makes `AdminEmails` authoritative on every
+startup:
+
+> - If the user is in adminEmails: promote Role to "admin" (if needed) and ensure a super-admin
+>   binding exists.
+> - If the user is NOT in adminEmails AND adminEmails is non-empty: demote Role from "admin" to
+>   "member" (if needed) and delete any super-admin binding.
+
+The safety net is a single global guard: when `AdminEmails` is nil or empty, **all** reconciliation
+is disabled and a warning is logged. The comment is explicit that this is deliberate — *"An empty
+list is almost always a config load failure, not an instruction to remove every administrator."*
+There is a further effect guard that refuses to proceed if the intended admin set would be empty.
+
+Both are good. Neither is what an enterprise needs, because both are all-or-nothing: they protect
+**every** administrator or **none**. There is no way to say *this one account must always retain
+access*, which is the ordinary break-glass requirement — a service owner, an on-call operator, or
+a named individual who must not be removable by a config edit.
+
+**Why this bites in practice.** We demoted our own user for testing by commenting the
+`AdminEmails` line out. That emptied the list, which silently disabled demotion globally — which
+is the only reason a *second* administrator, promoted directly and never present in
+`AdminEmails`, kept his access. Re-enabling the line later with one address would have made the
+list non-empty, re-armed demotion, and stripped him on the same restart. Nothing in the UI, the
+config, or the logs would have connected the two events: an edit naming one user removes a
+different user.
+
+Two properties combine to make it sharp:
+
+- **Membership of the list is the only durable source of admin.** A directly-created super-admin
+  binding is not a stable state; it survives only while the list is empty.
+- **Revocation is deferred to restart.** The code says so: *"super-admin revocation takes effect
+  on next hub restart."* So the damage lands at an unrelated moment — a routine upgrade, days
+  later — rather than when the edit was made.
+
+**What we did**, for anyone in the same position: a `systemd` `ExecStartPre` hook that re-adds the
+protected address to `AdminEmails` before the hub reads it, with an explicit
+`SCION_PROTECTED_ADMIN=` off-switch for deliberate removal. It works, and it is a workaround for
+a missing product concept.
+
+**Suggested fix**, smallest first:
+
+- **A protected-admin setting** — e.g. `hub.protected_admins`, a list the reconciler refuses to
+  demote regardless of `AdminEmails`. Small, declarative, and covers break-glass directly.
+- **Warn on the asymmetry.** When reconciliation is about to demote an administrator who is not
+  in `AdminEmails`, log it at WARN *naming the user*, before doing it. Today the demotion is a
+  side effect of an edit about someone else, and nothing announces it.
+- **Consider making a directly-granted super-admin binding a first-class state** that
+  reconciliation leaves alone, rather than one it deletes. The distinction between "granted by
+  config" and "granted deliberately in the UI" is currently lost.
+
 ## Docs that are wrong
 
 ### 4. OIDC redirect URI is wrong in the setup guide 🔴
@@ -2607,6 +2659,7 @@ Ordered by priority, not by issue number.
 | 5 | Correct the HTTPS-prerequisite claim | High | Trivial |
 | 8 | WARN on unknown `settings.yaml` keys | High | Low |
 | 7 | Support internal/BYO-cert/IAP deployments | High | Medium |
+| 45 | Add a protected-admin list the reconciler will not demote; warn by name before demoting an admin absent from `AdminEmails` | High | Low |
 | 44 | Honour `per-agent` workspaces for non-git projects — today every agent in one shares a single directory keyed by project slug, silently; and let an agent be created without a project | High | Low |
 | 43 | Add a branch field to project settings; make `PATCH /projects` **merge** labels instead of replacing them — a partial label write silently destroys the project's clone URL | High | Low |
 | 42 | Escape HTML in chat markdown instead of passing it through — `<template>` in prose silently truncates the message | High | Trivial |

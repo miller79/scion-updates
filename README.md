@@ -86,6 +86,7 @@ Full write-up: [**FINDINGS.md**](FINDINGS.md)
 |---|---|---|---|---|
 | 31 | Progeny agents still get no credentials after the #1292 fix — **three** further blockers, incl. `resolveSecrets` returning `count=0` with ancestry present | 🔴 **Security** | Low | _held_ |
 | 35 | Delete a git project and recreate it with the same name, and every agent creation fails — the on-disk marker still points at the deleted project | 🔴 Blocking | Trivial | [#28](https://github.com/miller79/scion/issues/28) |
+| 45 | No protected or break-glass admin — `AdminEmails` is authoritative and all-or-nothing, so an edit naming one user silently demotes another on the next restart | 🟠 High | Low [#35](https://github.com/miller79/scion/issues/35) |
 | 44 | Every agent in a **non-git** project shares one workspace directory — no per-agent mode exists, `workspaceMode` is silently dropped, and agents overwrite each other's files. Also: no way to run an agent without a project at all | 🟠 High | Low | [#9](https://github.com/miller79/scion/issues/9) |
 | 43 | A project's git branch is write-once at creation — no UI to change it, and the `PATCH` that could silently wipes the project's clone URL along with it | 🟠 High | Low | [#8](https://github.com/miller79/scion/issues/8) |
 | 42 | A chat message containing `<template>` renders truncated — everything after it silently disappears, though copy-paste still yields the full text | 🟠 High | Trivial | [#10](https://github.com/miller79/scion/issues/10) |

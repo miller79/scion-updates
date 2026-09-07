@@ -726,6 +726,11 @@ toast half of this too.
 
 ### 30. Chat is enabled by default but its backing store is not, so the UI renders and every send 503s 🟠
 
+> **PARTIALLY RESOLVED; remainder not reproducible at `8f66d97d`.** The schema half is fixed —
+> `message_broker` and `native_chat` are accepted keys. The nil-store behaviour cannot be
+> re-observed on our hub because we run with `message_broker.enabled: true`; reproducing it
+> means deliberately turning the broker off on a live hub, which we have not done. Re-verified on a live hub at `8f66d97d` (2026-09-07).
+
 > **PARTIALLY RESOLVED as of `fd818e08` (verified 2026-09-02, static).** The schema half is
 > fixed: `message_broker` and `native_chat` are both accepted keys now
 > (`pkg/config/hub_config.go:1033-1034`), so the setting that fixes this is no longer invisible
@@ -1033,6 +1038,11 @@ in-process, pass a path and let it read the file, so the `0600` still means some
 
 ### 41. Anything an agent prints is persisted durably, secrets included 🟠
 
+> **CONFIRMED still present at `8f66d97d`.** No redaction exists on the message-ingest path —
+> nothing in `handlers_agent_messaging.go` or `messagebroker.go` scrubs or masks. (Our own
+> journal shows no credential-shaped lines in the last 24h, but that is a property of what our
+> agents happened to print, not of the code.) Re-verified on a live hub at `8f66d97d` (2026-09-07).
+
 During a build our agent echoed an Artifactory token into a status message. It was redacted in
 the UI within seconds. The value is still in the database:
 
@@ -1141,6 +1151,11 @@ issue 8 on silent key-dropping.
 ---
 
 ### 33. Clone credentials are injected by string replace, which corrupts any URL that already has a username 🔴
+
+> **RESOLVED upstream.** Our PR was merged: `authenticatedCloneURL` builds the URL with
+> `net/url`. Review surfaced a further bug in our own patch — `url.Parse` succeeds on `ssh://`,
+> so the first draft injected an OAuth token into SSH remotes. The merged version guards on
+> `Scheme == "https"`. Filed as miller79/scion#2, closed. Re-verified on a live hub at `8f66d97d` (2026-09-07).
 
 Cloning an Azure DevOps repository fails with:
 
@@ -1263,6 +1278,11 @@ GitHub, GitLab and Bitbucket all serve fine without it, and Azure DevOps does no
 
 ### 34. A project-scoped `GITHUB_TOKEN` can never authenticate the initial clone 🟠
 
+> **RESOLVED as of `8f66d97d`.** The token is now written as a project secret *before*
+> `cloneSharedWorkspaceProject`, with a comment stating exactly why: *"This must happen before
+> cloneSharedWorkspaceProject so that resolveCloneToken can find it during the initial clone."*
+> (`pkg/hub/handlers_projects_core.go:556`). That was the whole of our complaint. Re-verified on a live hub at `8f66d97d` (2026-09-07).
+
 After fixing issue 33 the clone failed differently:
 
 ```
@@ -1322,6 +1342,11 @@ the loop entirely.
 
 ### 35. Recreating a project with the same name leaves a marker pinned to the deleted project, breaking all agent creation 🔴
 
+> **CONFIRMED still present at `8f66d97d`.** Nothing rewrites the on-disk marker at project
+> creation. The artefact of the original incident is still visible on our VM as
+> `project-configs/connections-ai-ado__3a57faf5.stale` beside the live
+> `connections-ai-ado__bf1c7cfb`. Re-verified on a live hub at `8f66d97d` (2026-09-07).
+
 After deleting and recreating a git project a few times while debugging a clone, every agent
 creation failed:
 
@@ -1377,6 +1402,11 @@ returns on restart because its on-disk directory is re-imported). Deletion consi
 the database row while leaving the filesystem artefact that will resurrect or misdirect it.
 
 ### 37. The `git-sandbox` platform skill can never reach a clone-per-agent workspace, and its content is wrong for one that has network access 🟠
+
+> **CONFIRMED still present at `8f66d97d`.** `shouldInjectSkill` still returns `injCtx.IsGit`
+> for `inject_when: git_workspace` (`pkg/agent/provision.go:1448`), and `IsGit` is still forced
+> to false inside a container when `SCION_HOST_UID` is set (`provision.go:486`). The two
+> together still make the condition unreachable in a clone-per-agent workspace. Re-verified on a live hub at `8f66d97d` (2026-09-07).
 
 > **NEEDS RETEST as of `fd818e08`.** `git-sandbox` no longer appears anywhere in the Go
 > sources — only in `docs-site/`, `changelog/` and `.design/`. The platform-skill seed we cited
@@ -1577,6 +1607,10 @@ we had set was absent, and nothing anywhere said it never could be.
 the one that costs people time.
 
 ### 39. Agents that use Docker are sibling containers, and nothing tells them so 🟠
+
+> **CONFIRMED still present at `8f66d97d`.** No marker of the sibling topology is exposed to
+> agents. The word "sibling" appears in the sources only in the unrelated sense of agents
+> sharing a workspace directory. Re-verified on a live hub at `8f66d97d` (2026-09-07).
 
 An agent doing container work talks to a daemon whose filesystem is **not** the agent's
 filesystem. Every path in a `docker run` argument is resolved by the daemon, on the host. Two
@@ -1914,6 +1948,11 @@ but it is not a functional requirement of the Hub.
 
 ### 6. Dev-auth cleanup targets the wrong user 🟡
 
+> **OBSOLETE as of `8f66d97d`.** `scion@localhost` appears nowhere in the Scion sources — only
+> in an unrelated Postgres test URL. The development user is now keyed by a well-known UUID
+> (`DevUserID`, `pkg/hub/devauth.go:30`) with its email read from the store, so the identity no
+> longer depends on matching an email at all. Retired rather than filed. Re-verified on a live hub at `8f66d97d` (2026-09-07).
+
 > **Source: the `oidc-setup.md` draft, not a file in this repository.** It was sent to us
 > directly rather than published, so it will not be found under `docs/` or `docs-site/`.
 > Our understanding is that it is a candidate for release — which is why these are worth
@@ -2045,6 +2084,9 @@ Metrics dashboard service initialized
 
 ### 15. `gce-demo-provision.sh` grants `logging.viewer` but not `monitoring.viewer` 🟠
 
+> **RESOLVED upstream.** Our PR was merged; `roles/monitoring.viewer` is now granted alongside
+> `logging.viewer`. Filed as miller79/scion#17, closed. Re-verified on a live hub at `8f66d97d` (2026-09-07).
+
 The provision script grants the service account:
 
 ```
@@ -2068,6 +2110,11 @@ appears to have been overlooked.
 
 
 ### 29. Agent telemetry is enabled by default but cannot work until a GCP service account is assigned, and it fails silently forever 🟠
+
+> **NOT REPRODUCIBLE on our hub at `8f66d97d`.** With `gcp_project_id` set, startup now logs a
+> single line — *"Telemetry project ID from settings: jbh-dev-reference"* — and no retry spam.
+> We could not re-observe the forever-retry behaviour because our configuration no longer
+> triggers it. Neither confirmed nor retired; it needs a hub with the project ID absent. Re-verified on a live hub at `8f66d97d` (2026-09-07).
 
 Every agent container we start is given:
 
@@ -2128,6 +2175,9 @@ have saved the whole investigation.
 
 ### 19. No way to import a template without a remote URL or server-side files 🟡
 
+> **CONFIRMED still present at `8f66d97d`.** `handlers_resource_import.go:561` still rejects
+> with *"sourceUrl or workspacePath is required"*; there is no multipart or zip path. Re-verified on a live hub at `8f66d97d` (2026-09-07).
+
 *(Feature request rather than a defect.)*
 
 Template import accepts exactly one source — a URL:
@@ -2171,6 +2221,12 @@ discovery path the URL flow already uses.
 ## Enterprise friction
 
 ### 7. No supported path for an internal-only host 🟠
+
+> **PARTIALLY ADDRESSED as of `8f66d97d`.** `docs-site/.../hosted/ha/auth-proxy-iap.md` now exists
+> and covers an IAP-fronted deployment, which did not before. The single-node path is unchanged:
+> `hosted/single-node/hub-setup-gce.md:50` still states that Caddy TLS provisioning *"Requires a
+> domain name pointed at the VM's external IP"*, which is exactly the case an internal-only host
+> cannot satisfy. Re-verified on a live hub at `8f66d97d` (2026-09-07).
 
 Several assumptions are baked in with no override:
 
@@ -2216,6 +2272,10 @@ acceptance of an unrecognised key is confirmed, the discarding is not re-confirm
 Cheap to implement, and it turns a silent misconfiguration into an obvious one.
 
 ### 9. The image build cannot be pointed at an internal package registry 🟠
+
+> **RESOLVED upstream.** Our PR was merged: `NPM_REGISTRY` build-arg plus a BuildKit secret for
+> credentials, documented in `image-build/README.md`. **pip is still not covered**, so `hermes`
+> remains unbuildable behind a PyPI-blocking proxy. Filed as miller79/scion#13, closed. Re-verified on a live hub at `8f66d97d` (2026-09-07).
 
 Originally filed as an `npm install` annoyance in `make web`. It is broader than that: **the
 container image build has no way to reach an internal mirror**, and on a network that blocks
@@ -2283,6 +2343,12 @@ all, this failure mode is worth a sentence.
 as a PR), add the `pip` equivalent for `hermes`, and document both in the image-build README.
 
 ### 26. No supported way to hide a harness config, and deleting one reverts on restart 🟠
+
+> **PARTIALLY RESOLVED as of `8f66d97d`.** The revert-on-restart half is addressed:
+> `resource_bootstrap.go:151` now sets `HarnessConfigStatusArchived` on obsolete *bundled*
+> configs instead of resurrecting them. The other half stands — there is still no user-facing
+> way to archive or hide a harness config; `harness_config_handlers.go` exposes no archive
+> action. We still hide ours with an out-of-band `harness-configs-disabled/` directory. Re-verified on a live hub at `8f66d97d` (2026-09-07).
 
 A hub ships eight global harness configs. Most teams use two or three, but every one of them
 appears in the agent-creation picker, including harnesses whose images the operator never
@@ -2419,6 +2485,9 @@ ent model but no agent-facing API — if agent-created conversations are wanted 
 schema is the natural place to allow an agent principal rather than retrofitting later.
 
 ### 36. The terminal link in the chat members sidebar forces a new browser tab *(UX)* 🟡
+
+> **RESOLVED upstream.** Our PR was merged; only the pop-out link keeps `target="_blank"`.
+> Filed as miller79/scion#22, closed. Re-verified on a live hub at `8f66d97d` (2026-09-07).
 
 Clicking the terminal icon next to an agent in the chat members sidebar opens a new browser tab
 rather than navigating within the app. Nothing signals that it will, and for the normal case —
